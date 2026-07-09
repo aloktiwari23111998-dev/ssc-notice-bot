@@ -1,0 +1,43 @@
+name: SSC Notice Checker
+
+on:
+  schedule:
+    # Har 15 minute me chalega (GitHub free minimum ~5 min hai, but scheduling
+    # delays practically 10-20 min ho sakti hai — bilkul normal hai, free hai).
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}   # allows manual "Run workflow" button too
+
+# Zaroori: workflow ko repo me file commit karne ki permission
+permissions:
+  contents: write
+
+jobs:
+  check-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run notifier
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        run: python notifier.py
+
+      - name: Commit updated state file
+        run: |
+          git config user.name "ssc-notice-bot"
+          git config user.email "actions@github.com"
+          git add seen_notices.json
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update seen notices [skip ci]"
+          git push
