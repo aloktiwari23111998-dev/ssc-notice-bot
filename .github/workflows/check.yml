@@ -4,7 +4,7 @@ on:
   schedule:
     # Har 15 minute me chalega (GitHub free minimum ~5 min hai, but scheduling
     # delays practically 10-20 min ho sakti hai — bilkul normal hai, free hai).
-    - cron: "*/5 * * * *"
+    - cron: '*/5 * * * *'
   workflow_dispatch: {}   # allows manual "Run workflow" button too
 
 # Zaroori: workflow ko repo me file commit karne ki permission
