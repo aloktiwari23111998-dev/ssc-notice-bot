@@ -74,13 +74,6 @@ milna band ho jaaye:
 
 ---
 
-## File Upload (jaisa SSC4EVER karta hai)
-
-Ab `notifier.py` sirf link nahi bhejta — jo bhi notice ek PDF/Word/Excel file hoti hai,
-uski **actual file** channel me directly post ho jaati hai (Telegram ka `sendDocument`
-API use hota hai), exactly jaise screenshot me `tentative_vacancies_09072026.pdf` post
-hua hai. Caption me filename, "SSC LATEST UPDATE 💣💥", notice ka title, aur
-"Join 👉 @SSCDIARY 👈" line automatically add ho jaati hai.
 
 Agar file kisi wajah se seedha URL se fetch na ho paaye, script automatically:
 1. File ko khud download karke upload karne ki koshish karega, aur
