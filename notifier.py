@@ -513,7 +513,7 @@ def send_text_message(category, title, link):
         f"🗂 <b>{title}</b>\n\n"
         f"🔗 {link}\n\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"<i>Sabse pehle, sabse tez — sirf</i> @SSC_DIARY <i>par</i> 🚀"
+        f"<i>Join-</i> @SSC_DIARY <i>par</i> 🚀"
     )
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     resp = requests.post(url, data={
