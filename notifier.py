@@ -18,6 +18,7 @@ GitHub Actions cron job se har 5 minute me chalta hai (bilkul FREE).
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -49,15 +50,51 @@ CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")  # e.g. "@SSC_DIARY"
 # ho, agar usme <a> tag me thoda lamba text hai, wo pakड़ liya jaayega.
 LINK_SELECTOR = "a[href]"
 
-MIN_TITLE_LENGTH = 20  # isse chhoti text wale links (menu items) ignore honge
+# SIRF real document/notice links pakadte hain — PDF, Word, Excel, ya SSC ke
+# apne "attachment" API se aane wale links. Ye zyada strict hai isliye junk
+# nahi aata, aur SSC ki har real notice/result/admit-card almost hamesha
+# ek file hi hoti hai, isliye ye reliable hai.
+FILE_EXTENSIONS = (".pdf", ".doc", ".docx", ".xls", ".xlsx")
 
-# Ye words jinke saath link ka text SHURU hota hai wo generic nav/menu/footer
-# links hote hain, inhe hamesha ignore karo chahe text lamba bhi ho.
-IGNORE_PREFIXES = (
-    "home", "login", "register", "contact", "sitemap", "privacy",
-    "terms", "disclaimer", "rti", "tender", "organisation", "about",
-    "candidate portal", "faq", "helpdesk", "grievance",
-)
+
+def is_file_href(href):
+    """Checks if a link points to an actual document (PDF/Word/Excel) or the
+    SSC attachment API. Title checking happens separately since SSC's titles
+    are plain text sitting NEXT TO the PDF icon, not inside its own <a> tag."""
+    if not href:
+        return False
+    if href.startswith(("javascript:", "mailto:", "tel:", "#")):
+        return False
+    href_lower = href.lower()
+    return href_lower.endswith(FILE_EXTENSIONS) or "attachment" in href_lower or "/api/" in href_lower
+
+
+SKIP_LINE_PATTERNS = [
+    r"^new$",
+    r"^\(\d+(\.\d+)?\s*(KB|MB)\)$",
+    r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)$",
+    r"^\d{1,2}$",
+    r"^\d{4}$",
+    r"^pdf$",
+    r"^view$",
+    r"^preview$",
+    r"^download$",
+]
+
+
+def clean_title(raw_text):
+    """SSC's notice title is plain text sitting next to the PDF icon, not
+    inside the <a> tag itself. So we climb up the DOM to the row container
+    and grab all its text — this then strips out the 'New' badge, date
+    fragments (day/month/year on separate lines), and file-size text,
+    leaving just the actual notice title."""
+    lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
+    kept = []
+    for line in lines:
+        if any(re.match(p, line, re.IGNORECASE) for p in SKIP_LINE_PATTERNS):
+            continue
+        kept.append(line)
+    return " ".join(kept).strip()
 
 
 def load_seen():
@@ -68,21 +105,6 @@ def load_seen():
 
 def save_seen(seen):
     STATE_FILE.write_text(json.dumps(seen, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def is_probably_a_notice(text, href):
-    """Generic filter: decides if a link is likely a real notice/update,
-    vs a navigation/menu/footer link. No hardcoded page-specific selectors."""
-    if not text or not href:
-        return False
-    if href.startswith(("javascript:", "mailto:", "tel:", "#")):
-        return False
-    if len(text) < MIN_TITLE_LENGTH:
-        return False
-    lowered = text.strip().lower()
-    if lowered.startswith(IGNORE_PREFIXES):
-        return False
-    return True
 
 
 def fetch_notices_from_page(page, category, url):
@@ -101,12 +123,31 @@ def fetch_notices_from_page(page, category, url):
         elements = page.query_selector_all(LINK_SELECTOR)
         for el in elements:
             href = el.get_attribute("href") or ""
-            text = (el.inner_text() or "").strip().replace("\n", " ")
-            if not is_probably_a_notice(text, href):
+            if not is_file_href(href):
                 continue
             if href.startswith("/"):
                 href = "https://ssc.gov.in" + href
-            found.append({"title": text, "link": href, "category": category})
+
+            # The title is plain text sitting next to the PDF icon, not
+            # inside the <a> tag. Climb up the DOM until we find an
+            # ancestor whose text is long enough to be a real title.
+            raw_row_text = el.evaluate("""
+                (node) => {
+                    let el = node;
+                    for (let i = 0; i < 5; i++) {
+                        if (!el.parentElement) break;
+                        el = el.parentElement;
+                        const t = el.innerText ? el.innerText.trim() : '';
+                        if (t.length > 25) return t;
+                    }
+                    return el && el.innerText ? el.innerText.trim() : '';
+                }
+            """)
+            title = clean_title(raw_row_text or "")
+            if len(title) < 8:
+                continue
+
+            found.append({"title": title, "link": href, "category": category})
     except Exception as e:
         print(f"WARNING: [{category}] Failed to load {url}: {e}")
 
