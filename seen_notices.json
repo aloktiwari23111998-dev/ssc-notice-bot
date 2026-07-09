@@ -2,5 +2,65 @@
   "https://ssc.gov.in/api/attachment/uploads/masterData/Others/debarreds_as_of_6th_April_2026_060426.pdf": {
     "title": "List of Debarred Candidates in Examinations Conducted by the Staff Selection Commission",
     "notified": true
+  },
+  "https://ssc.gov.in/": {
+    "title": "Government of India  Staff Selection Commission",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/for-candidates/examination-calendar": {
+    "title": "Examination Calendar",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/for-candidates/scheme-of-examination": {
+    "title": "Scheme of Examination",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/for-candidates/previous-year-question-paper": {
+    "title": "Previous Year Question Paper",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/for-candidates/form-of-certificates": {
+    "title": "Format of Certificates",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/for-candidates/normalization-method": {
+    "title": "Normalization Method",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/rti/proactive-disclosure": {
+    "title": "Proactive Disclosure (RTI)",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/about-us/background-of-commission": {
+    "title": "Background of Commission",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/about-us/function-commission": {
+    "title": "Function of Commission",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/about-us/objective-ssc": {
+    "title": "Vision, Mission & Objectives of SSC",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/about-us/rti": {
+    "title": "Right To Information",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/about-us/harasment": {
+    "title": "Committee on Sexual Harassment",
+    "category": "Notice Board",
+    "notified": true
   }
 }
