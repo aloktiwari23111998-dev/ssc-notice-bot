@@ -78,10 +78,12 @@ def fetch_notices():
 def build_caption(title, link):
     filename = link.rsplit("/", 1)[-1]
     return (
-        f"<b>{filename}</b>\n\n"
-        f"<u><b>SSC LATEST UPDATE</b></u> 💣💥\n\n"
-        f"{title}\n\n"
-        f"Join 👉 @SSCDIARY 👈 for fastest updates related to SSC 📝"
+        f"⚡️〔 <b>SSC ALERT</b> 〕⚡️\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"🗂 <b>{title}</b>\n\n"
+        f"📄 <code>{filename}</code>\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"<i>Sabse pehle, sabse tez — sirf</i> @SSC_DIARY <i>par</i> 🚀"
     )
 
 
@@ -91,10 +93,12 @@ def is_file_link(link):
 
 def send_text_message(title, link):
     message = (
-        f"🔔 <b>SSC New Notice</b>\n\n"
-        f"{title}\n\n"
+        f"⚡️〔 <b>SSC ALERT</b> 〕⚡️\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"🗂 <b>{title}</b>\n\n"
         f"🔗 {link}\n\n"
-        f"Join 👉 @SSCDIARY 👈 for fastest updates related to SSC 📝"
+        f"━━━━━━━━━━━━━━━\n"
+        f"<i>join the channel for fastest updates</i> @SSC_DIARY <i>par</i> 🚀"
     )
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     resp = requests.post(url, data={
