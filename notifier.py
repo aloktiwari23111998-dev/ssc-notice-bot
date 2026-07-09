@@ -7,30 +7,40 @@ Kya karta hai:
    Answer Key, Admit Card, Home) — sirf ek page nahi, poori site.
 2. Har page ko headless browser (Playwright) se open karta hai, kyunki SSC ka
    naya portal Angular/JS pe bana hai (plain requests kaam nahi karta).
-3. NAYA (root-cause fix): SSC ka Angular app apna data XHR/fetch calls se JSON
-   ke roop me laata hai (na ki plain HTML se). Ye script ab har page load ke
-   dauraan saari network responses "sunta" hai, unme se JSON body nikaalta
-   hai, aur usme se title+link jaisi cheezein generically extract karta hai.
-   Isse Result/Answer Key jaise pages bhi sahi se detect hote hain, jinki
-   asli list ek API call ke baad aati hai — na ki seedha DOM me.
-4. Result/Answer Key jaise pages pe pehle ek <select> dropdown me se exam
-   choose karna padta hai tabhi list load hoti hai. Script ab automatically
-   har dropdown option try karta hai taaki wo API call trigger ho aur data
-   mil sake (isi wajah se JE Result jaisi cheezein pehle miss ho rahi thi).
-5. DOM-based generic <a href> scanning bhi bas ek SAFETY NET ke roop me rakha
-   gaya hai — agar kisi page pe XHR intercept na ho paaye to purana tareeka
-   bhi chalta rahega. Dono sources ko merge karke duplicate hata diya jaata
-   hai.
-6. Pichli baar "seen_notices.json" me save kiye gaye se compare karta hai
-   (link ke saath-saath normalized title+category signature se bhi, taaki
-   ek hi notice do alag URL se do baar post na ho).
-7. Jo bhi NAYI cheez milti hai (kisi bhi page pe), Telegram channel pe bhej
-   deta hai — file/PDF ho to file bhejta hai, warna text+link bhejta hai.
-8. seen_notices.json update kar deta hai taaki dobara repeat na ho.
+3. SSC ka Angular app apna data XHR/fetch calls se JSON ke roop me laata hai.
+   Ye script har page load ke dauraan saari network responses "sunta" hai,
+   unme se JSON body nikaalta hai.
+4. SCHEMA-BASED PARSING (no more generic guessing): SSC ke actual API records
+   ka real shape ye hai:
+       { "headline": "...", "attachments": [
+             {"fileName": "...", "path": "...", "type": "...", "documentType": "..."},
+             ...
+       ] }
+   `headline` hamesha Telegram title banta hai. Har `attachments[]` entry se
+   ek alag notice banti hai (ek headline ke neeche multiple PDFs ho sakte
+   hain, jaise Result + Answer Key dono ek hi record me).
+5. `attachments[].path` khud ek public download URL NAHI hai — ye server ka
+   internal storage path hai (aur kabhi Windows-style backslashes ke saath
+   aata hai). Real SSC notification links (jaise
+   ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/<file>.pdf) se
+   confirm hota hai ki asli public endpoint `/api/attachment/<path>` hai —
+   is base ko primary candidate banaya gaya hai. Robustness ke liye ek chhoti
+   si candidate-URL list try ki jaati hai jab tak koi asli PDF download na
+   ho jaaye.
+6. Telegram pe upload karne se PEHLE file ko khud download karke validate
+   kiya jaata hai (status 200, Content-Type, "%PDF" magic bytes) — koi bhi
+   URL jo HTML/error page return kare, wo use nahi hoti.
+7. Result/Answer Key jaise pages pe pehle ek <select> dropdown me se exam
+   choose karna padta hai tabhi list load hoti hai — script automatically
+   har dropdown option try karta hai.
+8. DOM-based generic <a href> scanning ek SAFETY NET ke roop me rakha gaya
+   hai (JSON schema match na ho paaye tab ke liye).
+9. Pichli baar "seen_notices.json" me save kiye gaye se compare karta hai.
+10. Jo bhi NAYI cheez milti hai, Telegram channel pe bhej deta hai.
 
 GitHub Actions cron job se chalta hai (bilkul FREE). Env vars, Telegram
 functions, seen_notices.json format, aur message format — sab pehle jaisa
-hi hai, sirf fetching logic naye sirey se likhi gayi hai.
+hi hai.
 """
 
 import json
@@ -47,8 +57,6 @@ from playwright.sync_api import sync_playwright
 # CONFIG
 # ================================================================
 
-# SSC ke saare important public-facing pages jo monitor karne hain.
-# Naya page add karna ho to bas yaha ek aur line daal do.
 PAGES_TO_MONITOR = {
     "Notice Board": "https://ssc.gov.in/home/notice-board",
     "Result": "https://ssc.gov.in/home/candidate-result",
@@ -62,27 +70,13 @@ STATE_FILE = Path("seen_notices.json")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID")  # e.g. "@SSC_DIARY"
 
-# Generic anchor selector — used only as the DOM fallback scan.
 LINK_SELECTOR = "a[href]"
 
-# SIRF real document/notice links pakadte hain — PDF, Word, Excel, ya SSC ke
-# apne "attachment" API se aane wale links. Ye same filter API-derived aur
-# DOM-derived, dono tarah ke links pe lagta hai.
 FILE_EXTENSIONS = (".pdf", ".doc", ".docx", ".xls", ".xlsx")
 
-# SSC ke alag-alag modules (Notice Board / Result / Answer Key / Admit Card)
-# apne JSON responses me thoda alag field-naming use karte hain. Isliye hum
-# ek broad set of "possible" title/link keys check karte hain — jo bhi record
-# me in me se ek title-key aur ek link-key dono mil jaayein, use hum ek
-# candidate-notice maan lete hain.
-TITLE_KEYS = (
-    "title", "name", "heading", "subject", "noticeTitle", "resultTitle",
-    "examName", "fileName", "description", "displayName", "docTitle",
-)
-LINK_KEYS = (
-    "link", "url", "file", "filePath", "fileUrl", "path", "attachment",
-    "pdf", "pdfUrl", "documentPath", "docPath", "href",
-)
+# Confirmed (not guessed) from real SSC published notification links, e.g.
+# https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/<file>.pdf
+ATTACHMENT_BASE_URL = "https://ssc.gov.in/api/attachment/"
 
 SKIP_LINE_PATTERNS = [
     r"^new$",
@@ -108,8 +102,7 @@ USER_AGENT = (
 
 def is_probably_document_link(href):
     """Checks if a link points to an actual document (PDF/Word/Excel) or the
-    SSC attachment/API path. Works for both DOM hrefs and links pulled out
-    of JSON API responses."""
+    SSC attachment/API path. Used only for the DOM-scan safety net."""
     if not href:
         return False
     if href.startswith(("javascript:", "mailto:", "tel:", "#")):
@@ -123,12 +116,17 @@ def is_probably_document_link(href):
 
 
 def absolutize(link):
-    """Turns a relative API/DOM link into a full https://ssc.gov.in/... URL."""
+    """Turns a relative DOM href into a full https://ssc.gov.in/... URL.
+    Also normalizes Windows-style backslashes to forward slashes, since SSC
+    occasionally emits them and a literal "\\" in a URL path never resolves."""
     if not link:
         return None
     link = link.strip()
     if not link:
         return None
+
+    link = link.replace("\\", "/")
+
     if link.startswith("//"):
         return "https:" + link
     if link.startswith("http://") or link.startswith("https://"):
@@ -138,11 +136,51 @@ def absolutize(link):
     return "https://ssc.gov.in/" + link.lstrip("./")
 
 
+def build_candidate_download_urls(path):
+    """Builds an ordered list of candidate public download URLs from an
+    attachment's raw storage `path`. `path` is NOT itself a public URL, and
+    it sometimes uses Windows-style backslashes — both are handled here.
+
+    We don't assume a single fixed prefix; instead we try, in order, the
+    forms that are actually known/likely to work, and let the caller
+    (send_document) confirm which one really downloads a valid PDF before
+    anything gets uploaded to Telegram.
+    """
+    if not path:
+        return []
+
+    normalized = path.replace("\\", "/").strip()
+    normalized = normalized.lstrip("/")
+
+    if normalized.lower().startswith("http://") or normalized.lower().startswith("https://"):
+        return [normalized]
+
+    candidates = []
+
+    # Candidate 1 (primary): confirmed real-world SSC pattern —
+    # https://ssc.gov.in/api/attachment/<path>
+    candidates.append(ATTACHMENT_BASE_URL + normalized)
+
+    # Candidate 2: in case `path` already includes an "api/attachment/" or
+    # similar prefix segment, or the file is actually served directly off
+    # the domain root without going through the attachment API.
+    if not normalized.lower().startswith("api/attachment/"):
+        candidates.append("https://ssc.gov.in/" + normalized)
+    else:
+        candidates.append("https://ssc.gov.in/" + normalized)
+
+    # De-duplicate while preserving order.
+    seen = set()
+    ordered = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            ordered.append(c)
+    return ordered
+
+
 def clean_title(raw_text):
-    """SSC's DOM notice title often sits as plain text next to a PDF icon,
-    not inside the <a> tag itself. This strips out 'New' badges, date
-    fragments, and file-size text, leaving just the actual notice title.
-    Also used to lightly clean titles coming from JSON API responses."""
+    """Used for DOM-scan titles and to lightly clean the API `headline`."""
     if not raw_text:
         return ""
     lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
@@ -156,16 +194,14 @@ def clean_title(raw_text):
 
 def normalize_signature(title, category):
     """A loose fingerprint of a notice, used ONLY as an extra duplicate
-    check in-memory (does not change seen_notices.json's schema). Helps
-    catch the same notice appearing under two slightly different URLs
-    (e.g. once from the API, once from a DOM anchor)."""
+    check in-memory (does not change seen_notices.json's schema)."""
     t = re.sub(r"\s+", " ", (title or "").strip().lower())
     t = re.sub(r"[^a-z0-9 ]", "", t)
     return f"{category.lower()}::{t}"
 
 
 # ================================================================
-# JSON API extraction (the actual root-cause fix)
+# JSON API extraction — SCHEMA-BASED (headline + attachments[])
 # ================================================================
 
 def looks_like_api_json_response(url, content_type):
@@ -177,42 +213,58 @@ def looks_like_api_json_response(url, content_type):
     return False
 
 
-def extract_records_from_json(node, found, source_url):
-    """Recursively walks ANY parsed JSON structure (dict/list, whatever
-    shape SSC's API happens to return) and pulls out anything that looks
-    like a notice/result/notification record: something with a title-like
-    field AND a link-like field. This is intentionally generic so it keeps
-    working even if SSC changes field names slightly."""
+def extract_notice_records(node, found, source_url):
+    """Schema-exact extraction. SSC's real API shape is:
+
+        { "headline": "...", "attachments": [
+              {"fileName": ..., "path": ..., "type": ..., "documentType": ...},
+              ...
+        ] }
+
+    We only pull out `headline` and each attachment's `fileName`/`path`/
+    `type`/`documentType` — no guessing across alternate field names. We
+    still walk the tree (list/dict wrappers like {"data": [...]} are common)
+    purely to LOCATE objects matching this exact shape, not to guess field
+    names within them.
+    """
     if isinstance(node, dict):
-        title_val = None
-        link_val = None
-        for k in TITLE_KEYS:
-            v = node.get(k)
-            if isinstance(v, str) and v.strip():
-                title_val = v.strip()
-                break
-        for k in LINK_KEYS:
-            v = node.get(k)
-            if isinstance(v, str) and v.strip():
-                link_val = v.strip()
-                break
-        if title_val and link_val:
-            found.append({"title": title_val, "link": link_val, "_source": source_url})
+        headline = node.get("headline")
+        attachments = node.get("attachments")
+        if isinstance(headline, str) and headline.strip() and isinstance(attachments, list) and attachments:
+            clean_headline = headline.strip()
+            for att in attachments:
+                if not isinstance(att, dict):
+                    continue
+                file_name = att.get("fileName")
+                path = att.get("path")
+                doc_type = att.get("type")
+                document_type = att.get("documentType")
+                if not file_name or not path:
+                    print(f"DEBUG: Skipping attachment with missing fileName/path "
+                          f"under headline '{clean_headline[:60]}' "
+                          f"(source: {source_url}): {att}")
+                    continue
+                found.append({
+                    "headline": clean_headline,
+                    "fileName": file_name,
+                    "path": path,
+                    "type": doc_type,
+                    "documentType": document_type,
+                    "_source": source_url,
+                })
         for v in node.values():
             if isinstance(v, (dict, list)):
-                extract_records_from_json(v, found, source_url)
+                extract_notice_records(v, found, source_url)
     elif isinstance(node, list):
         for item in node:
             if isinstance(item, (dict, list)):
-                extract_records_from_json(item, found, source_url)
+                extract_notice_records(item, found, source_url)
 
 
 def try_trigger_dropdowns(page, category):
     """Result / Answer Key pages typically need an exam selected from a
     <select> dropdown before the real document list (and its backing API
-    call) fires. This is the concrete reason things like 'JE Result' were
-    being missed. We try every real option (skipping placeholders like
-    'Select Exam') and give the page time to fire its XHR after each pick."""
+    call) fires."""
     try:
         selects = page.query_selector_all("select")
     except Exception as e:
@@ -242,7 +294,6 @@ def try_trigger_dropdowns(page, category):
                 continue
             option_values.append(val)
 
-        # Safety cap so one page can't blow up run time / rate limits.
         for val in option_values[:12]:
             try:
                 sel.select_option(value=val)
@@ -255,9 +306,8 @@ def try_trigger_dropdowns(page, category):
 
 
 def scan_dom_links(page, category):
-    """Original generic DOM anchor scan — kept as a fallback safety net in
-    case a document is server-rendered and never shows up in an XHR/JSON
-    response the interceptor sees."""
+    """Generic DOM anchor scan — fallback safety net for when a page's data
+    doesn't show up as a headline/attachments JSON record."""
     found = []
     try:
         elements = page.query_selector_all(LINK_SELECTOR)
@@ -295,14 +345,19 @@ def scan_dom_links(page, category):
         title = clean_title(raw_row_text or "")
         if len(title) < 8:
             continue
-        found.append({"title": title, "link": href, "category": category})
+        found.append({
+            "title": title,
+            "link": href,
+            "category": category,
+            "file_name": href.rsplit("/", 1)[-1],
+        })
 
     return found
 
 
 def fetch_notices_from_page(page, category, url):
     """Renders one SSC page. Primary source: intercepted XHR/fetch JSON
-    responses (this is the real API data SSC's Angular app uses). Secondary
+    responses, parsed via the exact headline+attachments schema. Secondary
     source: generic DOM anchor scan, merged in as a fallback."""
     found_from_api = []
     discovered_api_urls = set()
@@ -325,14 +380,14 @@ def fetch_notices_from_page(page, category, url):
                 except Exception:
                     return
             discovered_api_urls.add(req_url)
-            extract_records_from_json(data, found_from_api, req_url)
+            extract_notice_records(data, found_from_api, req_url)
         except Exception as e:
             print(f"DEBUG: [{category}] response-handler error: {e}")
 
     page.on("response", handle_response)
     try:
         page.goto(url, wait_until="networkidle", timeout=60000)
-        page.wait_for_timeout(2000)  # let any late XHRs settle
+        page.wait_for_timeout(2000)
 
         try_trigger_dropdowns(page, category)
 
@@ -353,29 +408,41 @@ def fetch_notices_from_page(page, category, url):
         print(f"DEBUG: [{category}] No JSON API responses observed — "
               f"relying on DOM scan only for this page.")
 
-    # ---- Normalize + filter records coming from the JSON responses ----
+    # ---- One notice per attachment, title = headline, filename = fileName ----
     api_notices = []
     for rec in found_from_api:
-        link = absolutize(rec.get("link"))
-        if not link or not is_probably_document_link(link):
+        candidates = build_candidate_download_urls(rec["path"])
+        if not candidates:
+            print(f"DEBUG: [{category}] Could not build any download URL from "
+                  f"path='{rec['path']}' (headline='{rec['headline'][:60]}') — skipping.")
             continue
-        title = clean_title(rec.get("title", ""))
-        if len(title) < 4:
-            continue
-        api_notices.append({"title": title, "link": link, "category": category})
+        # We key/track this notice by its primary candidate URL; the actual
+        # working URL is re-confirmed at send time in send_document().
+        primary_link = candidates[0]
+        api_notices.append({
+            "title": rec["headline"],
+            "link": primary_link,
+            "download_candidates": candidates,
+            "category": category,
+            "file_name": rec["fileName"],
+            "doc_type": rec.get("type"),
+            "document_type": rec.get("documentType"),
+        })
 
-    # ---- DOM fallback ----
     dom_notices = scan_dom_links(page, category)
+    for n in dom_notices:
+        n.setdefault("download_candidates", [n["link"]])
 
     combined = {}
     for n in api_notices + dom_notices:
         combined.setdefault(n["link"], n)
     result = list(combined.values())
 
-    print(f"DEBUG: [{category}] {len(api_notices)} from JSON API + "
+    print(f"DEBUG: [{category}] {len(api_notices)} from JSON API (schema-matched) + "
           f"{len(dom_notices)} from DOM scan = {len(result)} unique notice-like item(s).")
     for i, n in enumerate(result[:10]):
-        print(f"DEBUG [{category}][{i}] {n['title'][:80]} -> {n['link']}")
+        print(f"DEBUG [{category}][{i}] headline='{n['title'][:80]}' "
+              f"fileName='{n.get('file_name')}' -> {n['link']}")
 
     return result
 
@@ -391,11 +458,10 @@ def fetch_all_notices():
             print(f"DEBUG: ---- Checking [{category}] -> {url} ----")
             page_notices = fetch_notices_from_page(page, category, url)
             all_notices.extend(page_notices)
-            time.sleep(1)  # be polite between page loads
+            time.sleep(1)
 
         browser.close()
 
-    # De-duplicate by link (same notice can appear on multiple pages, e.g. Home + Notice Board)
     deduped = {}
     for n in all_notices:
         deduped.setdefault(n["link"], n)
@@ -420,17 +486,16 @@ def save_seen(seen):
 
 
 # ================================================================
-# TELEGRAM POSTING — UNCHANGED
+# TELEGRAM POSTING
 # ================================================================
 
-def build_caption(category, title, link):
-    filename = link.rsplit("/", 1)[-1]
+def build_caption(category, title, file_name):
     return (
         f"⚡️〔 <b>SSC ALERT</b> 〕⚡️\n"
         f"━━━━━━━━━━━━━━━\n\n"
         f"🏷 <b>{category}</b>\n\n"
         f"🗂 <b>{title}</b>\n\n"
-        f"📄 <code>{filename}</code>\n\n"
+        f"📄 <code>{file_name}</code>\n\n"
         f"━━━━━━━━━━━━━━━\n"
         f"<i>Sabse pehle, sabse tez — sirf</i> @SSC_DIARY <i>par</i> 🚀"
     )
@@ -463,48 +528,106 @@ def send_text_message(category, title, link):
     return True
 
 
-def send_document(category, title, link):
-    """Sends the actual PDF/file into the channel, not just a link."""
-    caption = build_caption(category, title, link)
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-    resp = requests.post(url, data={
-        "chat_id": CHANNEL_ID,
-        "document": link,
-        "caption": caption,
-        "parse_mode": "HTML",
-    }, timeout=60)
-    if resp.status_code == 200:
-        return True
+def validate_downloaded_file(file_resp, link, file_name):
+    """Confirms a downloaded file is a real document and not an HTML
+    error/login page disguised behind a 200 status. Checks:
+      1. HTTP status == 200
+      2. Content-Type == application/pdf (only enforced when the file is
+         expected to be a PDF, per its extension)
+      3. First bytes == "%PDF" (only enforced for expected PDFs)
+    Logs the invalid response body (truncated) whenever a check fails.
+    """
+    if file_resp.status_code != 200:
+        print(f"VALIDATION FAILED: [{link}] HTTP status = {file_resp.status_code} (expected 200).")
+        _log_invalid_body(file_resp, link)
+        return False
 
-    print(f"sendDocument via URL failed ({resp.status_code}): {resp.text}. "
-          f"Trying manual download+upload...")
+    expected_pdf = link.lower().endswith(".pdf") or (file_name or "").lower().endswith(".pdf")
+    if expected_pdf:
+        content_type = file_resp.headers.get("Content-Type", "")
+        if "application/pdf" not in content_type.lower():
+            print(f"VALIDATION FAILED: [{link}] Content-Type = '{content_type}' "
+                  f"(expected 'application/pdf').")
+            _log_invalid_body(file_resp, link)
+            return False
+
+        content_start = file_resp.content[:4]
+        if content_start != b"%PDF":
+            print(f"VALIDATION FAILED: [{link}] File does not start with '%PDF' magic "
+                  f"bytes (got {content_start!r}) — looks like an HTML/error page, "
+                  f"not a real PDF.")
+            _log_invalid_body(file_resp, link)
+            return False
+
+    return True
+
+
+def _log_invalid_body(file_resp, link):
     try:
-        file_resp = requests.get(link, timeout=60, headers={
-            "User-Agent": USER_AGENT
-        })
-        file_resp.raise_for_status()
-        filename = link.rsplit("/", 1)[-1] or "notice.pdf"
-        resp2 = requests.post(url, data={
-            "chat_id": CHANNEL_ID,
-            "caption": caption,
-            "parse_mode": "HTML",
-        }, files={"document": (filename, file_resp.content)}, timeout=60)
-        if resp2.status_code == 200:
-            return True
-        print(f"Manual upload also failed: {resp2.status_code} {resp2.text}")
-    except Exception as e:
-        print(f"Manual download/upload error: {e}")
+        body_preview = file_resp.text[:500]
+    except Exception:
+        body_preview = repr(file_resp.content[:500])
+    print(f"VALIDATION DEBUG: [{link}] response body (truncated) -> {body_preview!r}")
 
-    print("Falling back to plain text message with link.")
+
+def send_document(category, title, link, file_name=None, download_candidates=None):
+    """Downloads the actual file ourselves FIRST, validates it, and only
+    then uploads it to Telegram. We never hand SSC's raw path/URL straight
+    to Telegram's sendDocument-by-URL, since an unresolved/incorrect
+    download URL would silently upload an HTML error page as if it were
+    the PDF.
+
+    `download_candidates` is an ordered list of URLs to try (built from the
+    attachment's schema `path`); the first one that downloads a validated
+    real file wins.
+    """
+    candidates = download_candidates or [link]
+    file_name = file_name or link.rsplit("/", 1)[-1] or "notice.pdf"
+    caption = build_caption(category, title, file_name)
+    telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+
+    for candidate_url in candidates:
+        print(f"DEBUG: [{category}] Trying download candidate: {candidate_url}")
+        try:
+            file_resp = requests.get(candidate_url, timeout=60, headers={
+                "User-Agent": USER_AGENT
+            })
+        except Exception as e:
+            print(f"DEBUG: [{category}] Download error for {candidate_url}: {e}")
+            continue
+
+        if not validate_downloaded_file(file_resp, candidate_url, file_name):
+            print(f"DEBUG: [{category}] Candidate failed validation, trying next "
+                  f"if available: {candidate_url}")
+            continue
+
+        # Got a real, validated file — upload it with the schema's fileName.
+        try:
+            resp = requests.post(telegram_url, data={
+                "chat_id": CHANNEL_ID,
+                "caption": caption,
+                "parse_mode": "HTML",
+            }, files={"document": (file_name, file_resp.content)}, timeout=60)
+            if resp.status_code == 200:
+                print(f"DEBUG: [{category}] Successfully uploaded '{file_name}' "
+                      f"from {candidate_url}")
+                return True
+            print(f"Telegram upload failed ({resp.status_code}): {resp.text}")
+        except Exception as e:
+            print(f"Telegram upload error: {e}")
+
+    print(f"WARNING: [{category}] All download candidates failed for headline "
+          f"'{title}' (fileName='{file_name}'). Falling back to plain text message.")
     return send_text_message(category, title, link)
 
 
-def send_to_telegram(category, title, link):
+def send_to_telegram(category, title, link, file_name=None, download_candidates=None):
     if not BOT_TOKEN or not CHANNEL_ID:
         print("ERROR: TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID not set.")
         return False
     if is_file_link(link):
-        return send_document(category, title, link)
+        return send_document(category, title, link, file_name=file_name,
+                              download_candidates=download_candidates)
     return send_text_message(category, title, link)
 
 
@@ -516,9 +639,6 @@ def main():
     seen = load_seen()
     print(f"DEBUG: {len(seen)} notices already marked as seen from previous runs.")
 
-    # Extra in-memory duplicate guard (does not change seen_notices.json's
-    # schema) — catches the same notice reachable via two different URLs
-    # (e.g. once via the JSON API, once via a DOM anchor).
     seen_signatures = set()
     for entry in seen.values():
         if isinstance(entry, dict) and "title" in entry and "category" in entry:
@@ -539,20 +659,25 @@ def main():
         if key in seen:
             continue
         if sig in seen_signatures:
-            print(f"DEBUG: Skipping likely duplicate (same title/category, "
+            print(f"DEBUG: Skipping likely duplicate (same headline/category, "
                   f"different link) [{n['category']}]: {n['title']}")
             seen[key] = {"title": n["title"], "category": n["category"], "notified": True}
             continue
 
-        print(f"New notice found [{n['category']}]: {n['title']} -> {n['link']}")
-        ok = send_to_telegram(n["category"], n["title"], n["link"])
+        print(f"New notice found [{n['category']}]: {n['title']} "
+              f"(fileName={n.get('file_name')}) -> {n['link']}")
+        ok = send_to_telegram(
+            n["category"], n["title"], n["link"],
+            file_name=n.get("file_name"),
+            download_candidates=n.get("download_candidates"),
+        )
         if ok:
             seen[key] = {"title": n["title"], "category": n["category"], "notified": True}
             seen_signatures.add(sig)
             new_count += 1
         else:
             print(f"WARNING: Failed to send notice [{n['category']}]: {n['title']}")
-        time.sleep(2)  # avoid Telegram rate limits
+        time.sleep(2)
 
     if len(seen) > 800:
         seen = dict(list(seen.items())[-800:])
