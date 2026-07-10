@@ -12,7 +12,7 @@ on:
 # seen_notices.json push karte waqt conflict kar sakte hain
 concurrency:
   group: ssc-notice-check
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 # Zaroori: workflow ko repo me file commit karne ki permission
 permissions:
