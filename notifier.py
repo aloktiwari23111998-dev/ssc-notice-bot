@@ -1,5 +1,4 @@
-bash
-cat > /home/claude/notifier_new.py << 'PYEOF'
+
 """
 SSC (ssc.gov.in) + DSSSB (dsssb.delhi.gov.in) -> Telegram Auto-Poster
 ====================================================
@@ -859,7 +858,7 @@ def build_caption(category, title, file_name, source="SSC"):
         f"🗂 <b>{title}</b>\n\n"
         f"📄 <code>{file_name}</code>\n\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"<i>Sabse pehle, sabse tez — sirf</i> @SSC_DIARY <i>par</i> 🚀"
+        f"<i>JOIN - </i> @SSC_DIARY <i>par</i> 🚀"
     )
 
 
