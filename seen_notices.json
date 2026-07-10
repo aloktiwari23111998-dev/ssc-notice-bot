@@ -452,5 +452,205 @@
     "title": "Important Notice - Combined Higher Secondary (10+2) Level Examination, 2025-Extension of window for Option-cum-Preference Form",
     "category": "Home",
     "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/writeup_je_09072026.pdf": {
+    "title": "Junior Engineer (Civil, Mechanical and Electrical) Examination, 2025- Declaration of First Round of Tentative Allocation (FRTA)",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/tentative_vacancies_09072026.pdf": {
+    "title": "Tentative Vacancy for Combined Hindi Translators Examination, 2026 (as on 09.07.2026)",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/Write_up_Final_Answer_Keys_CBE_Executive_2025..pdf": {
+    "title": "Constable (Executive) Male and Female in Delhi Police Examination, 2025: Uploading of Final Answer Keys along with Question Papers cum Response Sheets of CBE along with the Marks.",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/Corrigendum to Notice Steno, 2025.pdf": {
+    "title": "Corrigendum to the Notice of Grade 'C' Stenographers Limited Departmental Competitive Examination, 2025.",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/Corrigendum_29062026.pdf": {
+    "title": "Corrigendum to the Notice of Senior Secretariat Assistant/ Upper Division Clerk Grade Limited Departmental Competitive Examination, 2025",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/writeup_dphcm_25062026.pdf": {
+    "title": "Head Constable (Ministerial) in Delhi Police Examination, 2025 – Shortlisting additional candidates to appear in Physical Endurance and Measurement Test (PE and MT)/ Document Verification (DV)/ Trade Test (Skill Test).",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/Notice_of_ASO_2026_06_25.pdf.pdf": {
+    "title": "Notice of  Assistant Section Officer/ Assistant Grade Limited Departmental Competitive Examination, 2025",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/Notice_of_SSA_Dopt_2026_06_25.pdf.pdf": {
+    "title": "Notice of  Senior Secretariat Assistant/ Upper Division Clerk Grade Limited Departmental Competitive Examination, 2025 [Central Secretariat Clerical Service (CSCS) Cadre of Department of Personnel and Training (DoPT)]",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/Notice_of_JSA_Dopt_2026_06_25.pdf.pdf": {
+    "title": "Notice of  Junior Secretariat Assistant/ Lower Division Clerk Grade Limited Departmental Competitive Examination, 2025 [Central Secretariat Clerical Service (CSCS) Cadre of Department of Personnel and Training (DoPT)]",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/writeup_dphct_25062026.pdf": {
+    "title": "Head Constable {Assistant Wireless Operator (AWO)/Tele-Printer Operator (TPO)} in Delhi Police Examination, 2025 – Shortlisting of additional candidates to appear in Physical Endurance and Measurement Test (PE and MT)/ Document Verification (DV)/ Trade Test",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Others/debarreds_as_of_6th_April_2026_060426.pdf": {
+    "title": "List of Debarred Candidates in Examinations Conducted by the Staff Selection Commission",
+    "category": "Notice Board",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/ROLL_09072026.pdf": {
+    "title": "Junior Engineer (Civil, Mechanical and Electrical) Examination, 2025- List of candidates provisionally shortlisted for First Round of Tentative Allocation (FRTA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/writeup_je_09072026.pdf": {
+    "title": "Junior Engineer (Civil, Mechanical and Electrical) Examination, 2025- List of candidates provisionally shortlisted for First Round of Tentative Allocation (FRTA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/LIST1A_25062026.pdf": {
+    "title": "Head Constable (Ministerial) in Delhi Police Examination, 2025 – Additional Male (Open) Candidates qualified for PE and MT/ DV/ Trade Test (Skill Test) (List-IA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/writeup_dphcm_25062026.pdf": {
+    "title": "Head Constable (Ministerial) in Delhi Police Examination, 2025 – Additional Male (Open) Candidates qualified for PE and MT/ DV/ Trade Test (Skill Test) (List-IA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/LIST3A_25062026.pdf": {
+    "title": "Head Constable (Ministerial) in Delhi Police Examination, 2025– Additional Female (Open) Candidates qualified for PE and MT/ DV/ Trade Test (Skill Test) (List-IIIA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/LIST1A.pdf": {
+    "title": "Head Constable {Assistant Wireless Operator (AWO)/Tele-Printer Operator (TPO)} in Delhi Police Examination, 2025 – Additional Female Candidates qualified for PE and MT/ DV/ Trade Test in Open Category (List-IA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/writeup_dphct_25062026.pdf": {
+    "title": "Head Constable {Assistant Wireless Operator (AWO)/Tele-Printer Operator (TPO)} in Delhi Police Examination, 2025 – Additional Female Candidates qualified for PE and MT/ DV/ Trade Test in Open Category (List-IA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/LIST2A.pdf": {
+    "title": "Head Constable {Assistant Wireless Operator (AWO)/Tele-Printer Operator (TPO)} in Delhi Police Examination, 2025– Additional Male candidates qualified for PE and MT/ DV/ Trade Test in Open Category (List-IIA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/LIST3A.pdf": {
+    "title": "Head Constable {Assistant Wireless Operator (AWO)/Tele-Printer Operator (TPO)} in Delhi Police Examination, 2025– Additional ESM Candidates qualified for PE and MT/ DV/ Trade Test (List-IIIA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/LIST4A.pdf": {
+    "title": "Head Constable {Assistant Wireless Operator (AWO)/Tele-Printer Operator (TPO)} in Delhi Police Examination, 2025– Additional Female Departmental Candidates qualified for PE and MT/ DV/ Trade Test (List-IVA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/LIST5A.pdf": {
+    "title": "Head Constable {Assistant Wireless Operator (AWO)/Tele-Printer Operator (TPO)} in Delhi Police Examination, 2025– Additional Male Departmental Candidates qualified for PE and MT/ DV/ Trade Test (List-VA)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/writeup_dpcd_25062026.pdf": {
+    "title": "Constable (Driver) Male in Delhi Police Examination, 2025 – Shortlisting of one (01) additional candidate to appear in Physical Endurance and Measurement Test (PE and MT)/ Document Verification (DV)/ Trade Test",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/LIST_I_ROL_MALE_19062026.pdf": {
+    "title": "Constable (Executive) Male and Female in Delhi Police Examination, 2025 – Male Candidates qualified for PE and MT/ DV (List-I)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/Results/writeup_dpce_19062026.pdf": {
+    "title": "Constable (Executive) Male and Female in Delhi Police Examination, 2025 – Male Candidates qualified for PE and MT/ DV (List-I)",
+    "category": "Result",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/Write_up_Final_Answer_Keys_CBE_Executive_2025..pdf": {
+    "title": "Constable (Executive) Male and Female in Delhi Police Examination, 2025: Uploading of Final Answer Keys along with Question Papers cum Response Sheets of CBE along with the Marks.",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/Write_up_Final_Answer_Keys_CBE_min_2025..pdf": {
+    "title": "Head Constable (Ministerial) in Delhi Police Examination, 2025: Uploading of Final Answer Keys along with Question Papers cum Response Sheets of CBE along with the Marks",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/Final_writeup_17062026.pdf": {
+    "title": "Uploading of Final Answer Key(s) along with Candidates’ Response Sheet(s) and Marks of candidates of Combined Graduate Level Examination, 2025 (Tier-II) -reg",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/writeup_16062026.pdf": {
+    "title": "Head Constable (AWO/TPO) in Delhi Police Examination, 2025: Uploading of Final Answer Keys along with Question Papers cum Response Sheets of CBE along with the Marks",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/tentative_answerkey_15062026.pdf": {
+    "title": "Constable (GD) in Central Armed Police Forces (CAPFs) and SSF, and Rifleman (GD) in Assam Rifles Examination, 2026: Uploading of Tentative Answer Keys along with Question Paper(s) cum Response Sheet(s).",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/writeup_26052026.pdf": {
+    "title": "Constable (Driver) Male in Delhi Police Examination, 2025 – Uploading of Final Answer Keys along with Question Papers cum Response Sheets of CBE, along with the Marks",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/writeup_21042026.pdf": {
+    "title": "Sub Inspector in Delhi Police and Central Armed Police Forces Examination, 2025 (Paper-I): Uploading of Final Answer Keys along with Question Paper(s) cum Response Sheet(s), and Marks",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/tentative_answer_key_16042026.pdf": {
+    "title": "Junior Engineer (Civil, Mechanical and Electrical) Examination, 2025 (Paper-II): Uploading of Tentative Answer Keys along with Question Paper(s) cum Response Sheet(s)",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/writeup_23032026.pdf": {
+    "title": "Junior Engineer (Civil, Mechanical and Electrical) Examination, 2025 \r\n(Paper-I): Uploading of Final Answer Keys along with Question Paper(s) cum \r\nResponse Sheet(s), and Marks – regarding",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/AnswerKeys/writeup_20032026.pdf": {
+    "title": "Phase-XIII/2025/Selection Posts Examination - Uploading of Final \r\nAnswer Keys along with Question Paper cum Response Sheets",
+    "category": "Answer Key",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/writeup_dpcd_25062026.pdf": {
+    "title": "Constable (Driver) Male in Delhi Police Examination, 2025 – Shortlisting of one (01) additional candidate to appear in Physical Endurance and Measurement Test (PE and MT)/ Document Verification (DV)/ Trade Test",
+    "category": "Home",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/JE2025_FINAL_VACANCY_24062026.pdf": {
+    "title": "Final Vacancies of Junior Engineer (Civil, Mechanical and Electrical) Examination, 2025",
+    "category": "Home",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/CGLE_Reopen_23062026.pdf": {
+    "title": "Important Notice regarding re-opening of window for submission of online application form for Combined Graduate Level Examination, 2026",
+    "category": "Home",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/Write_up_Final_Answer_Keys_CBE_min_2025..pdf": {
+    "title": "Head Constable (Ministerial) in Delhi Police Examination, 2025: Uploading of Final Answer Keys along with Question Papers cum Response Sheets of CBE along with the Marks",
+    "category": "Home",
+    "notified": true
+  },
+  "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/Notice_22062026.pdf": {
+    "title": "Important Notice - Combined Higher Secondary (10+2) Level Examination, 2025-Extension of window for Option-cum-Preference Form",
+    "category": "Home",
+    "notified": true
   }
 }
