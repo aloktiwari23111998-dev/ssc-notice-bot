@@ -521,7 +521,7 @@ MAX_AUTO_DISCOVERED_PAGES = 5  # unbounded growth se bachne ke liye cap
 # time kabhi nahi legi -- runtime ko bound karne ka asli fix. Agar budget
 # khatam ho jaaye beech me, baaki pages skip ho jaate hain aur agle run
 # (kuch minute baad) me automatically retry ho jaate hain.
-DSSSB_TIME_BUDGET_SECONDS = 90
+DSSSB_TIME_BUDGET_SECONDS = 120
 
 # DSSSB rows show "Date: dd-mm-yyyy" as ONE combined line, plus a
 # Filter/Reset search widget and a "(Ex: 2025)" placeholder hint.
@@ -669,46 +669,38 @@ def extract_dsssb_records(page, category):
     return found
 
 
+import urllib.parse
+
+
+def _strip_html_tags(html_fragment):
+    text = re.sub(r"<[^>]+>", " ", html_fragment)
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+    text = text.replace("&#39;", "'").replace("&rsquo;", "'").replace("&quot;", '"')
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def extract_dsssb_records_via_reader(url, category):
-    """FALLBACK for when direct browser navigation to DSSSB fails.
+    """FALLBACK #1: Jina Reader proxy (https://r.jina.ai/). Fetches the
+    page server-side on Jina's infrastructure and converts it to Markdown.
 
-    Confirmed root cause: DSSSB's server blocks connections from GitHub
-    Actions' datacenter IP ranges. Jina Reader's DEFAULT engine also
-    failed here ("proxy handshake error" / HTTP 422) -- its default proxy
-    pool's IPs appear to be in a similarly blocked range. Forcing
-    `X-Engine: browser` makes Jina fetch the page with a real headless
-    browser from a different part of its infrastructure, which has a
-    meaningfully different chance of getting through. We try that first
-    (best quality), then fall back to the default engine.
-
-    Both attempts are given SHORT timeouts -- this function is called
-    inside fetch_dsssb()'s overall time budget, so it must fail fast
-    rather than hang.
-    """
+    `X-Wait-For-Selector: a` tells Jina to return as soon as ANY anchor
+    tag appears in the DOM, instead of waiting for full network-idle --
+    this is a much lighter condition and resolves faster when the page
+    IS reachable at all. Single attempt only (previous 2-attempt browser+
+    direct combo consistently both failed and wasted ~2x the time for no
+    benefit — Jina's own infra appears unable to reach DSSSB reliably
+    either, so more attempts here don't help, they just cost time)."""
     found = []
-    text = None
-
-    attempts = [
-        {"X-Engine": "browser", "X-Timeout": "10"},
-        {"X-Engine": "direct", "X-Timeout": "8"},
-    ]
-
-    for headers in attempts:
-        engine = headers.get("X-Engine")
-        try:
-            resp = SESSION.get(f"https://r.jina.ai/{url}", headers=headers, timeout=15)
-            if resp.status_code == 200 and resp.text and len(resp.text) > 200:
-                text = resp.text
-                print(f"DEBUG: [DSSSB/{category}] Reader-proxy succeeded (engine={engine}).")
-                break
-            print(f"DEBUG: [DSSSB/{category}] Reader-proxy (engine={engine}) failed: "
+    headers = {"X-Engine": "direct", "X-Wait-For-Selector": "a", "X-Timeout": "12"}
+    try:
+        resp = SESSION.get(f"https://r.jina.ai/{url}", headers=headers, timeout=18)
+        if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
+            print(f"DEBUG: [DSSSB/{category}] Jina reader failed: "
                   f"HTTP {resp.status_code} — {resp.text[:150]!r}")
-        except Exception as e:
-            print(f"DEBUG: [DSSSB/{category}] Reader-proxy (engine={engine}) error: {e}")
-
-    if not text:
-        print(f"DEBUG: [DSSSB/{category}] All reader-proxy attempts failed — "
-              f"this page will be retried on the next run.")
+            return found
+        text = resp.text
+    except Exception as e:
+        print(f"DEBUG: [DSSSB/{category}] Jina reader error: {e}")
         return found
 
     link_pattern = re.compile(r"\[([^\]]*)\]\((https?://[^\s\)]+)\)")
@@ -718,24 +710,84 @@ def extract_dsssb_records_via_reader(url, category):
             link_url_lower = link_url.lower()
             if not (link_url_lower.endswith(FILE_EXTENSIONS) or "attachment" in link_url_lower):
                 continue
-
             rest_of_line = link_pattern.sub(" ", line).strip()
             title_source = rest_of_line if len(rest_of_line) >= 8 else link_text
             title = clean_dsssb_title(title_source)
             if len(title) < 8:
                 continue
-
             found.append({
-                "title": title,
-                "link": link_url,
-                "category": category,
+                "title": title, "link": link_url, "category": category,
                 "file_name": link_url.rsplit("/", 1)[-1],
-                "download_candidates": [link_url],
-                "source": "DSSSB",
+                "download_candidates": [link_url], "source": "DSSSB",
             })
 
-    print(f"DEBUG: [DSSSB/{category}] Reader-proxy fallback found {len(found)} document link(s).")
+    print(f"DEBUG: [DSSSB/{category}] Jina reader found {len(found)} document link(s).")
     return found
+
+
+def extract_dsssb_records_via_allorigins(url, category):
+    """FALLBACK #2: allorigins.win -- a plain server-side HTTP fetch (no
+    browser rendering, no Puppeteer), running on a completely different
+    provider/IP range than Jina. Architecturally different from Fallback
+    #1, so it has an independent chance of not being on DSSSB's block
+    list even when Jina also fails. Returns raw HTML, which we scan
+    directly with regex for document links, using the HTML immediately
+    BEFORE each link as the title source (same "climb up to find the
+    title" idea as the DOM version, just done on raw markup instead of
+    a live page)."""
+    found = []
+    try:
+        proxied = "https://api.allorigins.win/raw?url=" + urllib.parse.quote(url, safe="")
+        resp = SESSION.get(proxied, timeout=20)
+        if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
+            print(f"DEBUG: [DSSSB/{category}] allorigins failed: HTTP {resp.status_code}")
+            return found
+        html = resp.text
+    except Exception as e:
+        print(f"DEBUG: [DSSSB/{category}] allorigins error: {e}")
+        return found
+
+    anchor_pattern = re.compile(r'<a\b[^>]*href=["\']([^"\']+)["\']', re.IGNORECASE)
+    for m in anchor_pattern.finditer(html):
+        href = m.group(1)
+        href_lower = href.lower()
+        if not (href_lower.endswith(FILE_EXTENSIONS) or "attachment" in href_lower):
+            continue
+        full_link = absolutize(href, base_domain=DSSSB_BASE)
+        if not full_link:
+            continue
+
+        window_start = max(0, m.start() - 600)
+        title = _strip_html_tags(html[window_start:m.start()])
+        if len(title) > 160:
+            title = title[-160:]
+        title = clean_dsssb_title(title)
+        if len(title) < 8:
+            continue
+
+        found.append({
+            "title": title, "link": full_link, "category": category,
+            "file_name": full_link.rsplit("/", 1)[-1],
+            "download_candidates": [full_link], "source": "DSSSB",
+        })
+
+    print(f"DEBUG: [DSSSB/{category}] allorigins found {len(found)} document link(s).")
+    return found
+
+
+def fetch_dsssb_via_fallback_chain(url, category):
+    """Tries both proxy fallbacks in order, stopping at the first that
+    returns anything. Two independent providers/architectures roughly
+    doubles the odds that at least one gets through DSSSB's blocking."""
+    records = extract_dsssb_records_via_reader(url, category)
+    if records:
+        return records
+    records = extract_dsssb_records_via_allorigins(url, category)
+    if records:
+        return records
+    print(f"DEBUG: [DSSSB/{category}] Both fallback proxies failed — "
+          f"this page will be retried on the next run.")
+    return []
 
 
 def fetch_dsssb_page(page, category, url):
@@ -788,7 +840,7 @@ def fetch_dsssb_page(page, category, url):
         page.wait_for_timeout(800)
     except Exception as e:
         print(f"WARNING: [DSSSB/{category}] Direct browser load failed ({e}). "
-              f"Falling back to Jina Reader proxy...")
+              f"Falling back to proxy chain (Jina Reader -> allorigins)...")
         page_loaded = False
     finally:
         try:
@@ -823,7 +875,7 @@ def fetch_dsssb_page(page, category, url):
     if page_loaded:
         dom_notices = extract_dsssb_records(page, category)
     else:
-        dom_notices = extract_dsssb_records_via_reader(url, category)
+        dom_notices = fetch_dsssb_via_fallback_chain(url, category)
 
     combined = {}
     for n in api_notices + dom_notices:
