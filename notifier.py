@@ -521,7 +521,15 @@ MAX_AUTO_DISCOVERED_PAGES = 5  # unbounded growth se bachne ke liye cap
 # time kabhi nahi legi -- runtime ko bound karne ka asli fix. Agar budget
 # khatam ho jaaye beech me, baaki pages skip ho jaate hain aur agle run
 # (kuch minute baad) me automatically retry ho jaate hain.
-DSSSB_TIME_BUDGET_SECONDS = 120
+DSSSB_TIME_BUDGET_SECONDS = 150
+
+# Agar SCRAPER_API_KEY set hai, to har run DSSSB check karne se free
+# monthly credits (1000/month) jaldi khatam ho sakte hain agar cron bahut
+# frequent hai. Isse env var se control kar sakte ho -- e.g. "6" matlab
+# DSSSB sirf har 6th run me check hoga (baaki runs me sirf SSC chalega,
+# jo bilkul free/unlimited hai). Default "1" = har run me check (jaisa
+# pehle tha, bilkul backward-compatible).
+DSSSB_CHECK_EVERY_N_RUNS = max(1, int(os.environ.get("DSSSB_CHECK_EVERY_N_RUNS", "1")))
 
 # DSSSB rows show "Date: dd-mm-yyyy" as ONE combined line, plus a
 # Filter/Reset search widget and a "(Ex: 2025)" placeholder hint.
@@ -691,9 +699,9 @@ def extract_dsssb_records_via_reader(url, category):
     benefit — Jina's own infra appears unable to reach DSSSB reliably
     either, so more attempts here don't help, they just cost time)."""
     found = []
-    headers = {"X-Engine": "direct", "X-Wait-For-Selector": "a", "X-Timeout": "12"}
+    headers = {"X-Engine": "direct", "X-Wait-For-Selector": "a", "X-Timeout": "8"}
     try:
-        resp = SESSION.get(f"https://r.jina.ai/{url}", headers=headers, timeout=18)
+        resp = SESSION.get(f"https://r.jina.ai/{url}", headers=headers, timeout=12)
         if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
             print(f"DEBUG: [DSSSB/{category}] Jina reader failed: "
                   f"HTTP {resp.status_code} — {resp.text[:150]!r}")
@@ -725,28 +733,12 @@ def extract_dsssb_records_via_reader(url, category):
     return found
 
 
-def extract_dsssb_records_via_allorigins(url, category):
-    """FALLBACK #2: allorigins.win -- a plain server-side HTTP fetch (no
-    browser rendering, no Puppeteer), running on a completely different
-    provider/IP range than Jina. Architecturally different from Fallback
-    #1, so it has an independent chance of not being on DSSSB's block
-    list even when Jina also fails. Returns raw HTML, which we scan
-    directly with regex for document links, using the HTML immediately
-    BEFORE each link as the title source (same "climb up to find the
-    title" idea as the DOM version, just done on raw markup instead of
-    a live page)."""
+def _extract_dsssb_links_from_html(html, category):
+    """Shared HTML-parsing logic for every raw-HTML proxy fallback below.
+    Regex-scans for document links, using the HTML text immediately
+    BEFORE each link as the title source (same idea as DOM-climbing, done
+    on raw markup instead of a live page)."""
     found = []
-    try:
-        proxied = "https://api.allorigins.win/raw?url=" + urllib.parse.quote(url, safe="")
-        resp = SESSION.get(proxied, timeout=20)
-        if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
-            print(f"DEBUG: [DSSSB/{category}] allorigins failed: HTTP {resp.status_code}")
-            return found
-        html = resp.text
-    except Exception as e:
-        print(f"DEBUG: [DSSSB/{category}] allorigins error: {e}")
-        return found
-
     anchor_pattern = re.compile(r'<a\b[^>]*href=["\']([^"\']+)["\']', re.IGNORECASE)
     for m in anchor_pattern.finditer(html):
         href = m.group(1)
@@ -770,22 +762,139 @@ def extract_dsssb_records_via_allorigins(url, category):
             "file_name": full_link.rsplit("/", 1)[-1],
             "download_candidates": [full_link], "source": "DSSSB",
         })
+    return found
 
+
+def extract_dsssb_records_via_allorigins(url, category):
+    """FALLBACK #2 (free, no signup): allorigins.win -- plain server-side
+    HTTP fetch, different provider/IP range than Jina."""
+    try:
+        proxied = "https://api.allorigins.win/raw?url=" + urllib.parse.quote(url, safe="")
+        resp = SESSION.get(proxied, timeout=12)
+        if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
+            print(f"DEBUG: [DSSSB/{category}] allorigins failed: HTTP {resp.status_code}")
+            return []
+        html = resp.text
+    except Exception as e:
+        print(f"DEBUG: [DSSSB/{category}] allorigins error: {e}")
+        return []
+
+    found = _extract_dsssb_links_from_html(html, category)
     print(f"DEBUG: [DSSSB/{category}] allorigins found {len(found)} document link(s).")
     return found
 
 
+def extract_dsssb_records_via_codetabs(url, category):
+    """FALLBACK #3 (free, no signup): codetabs.com's public CORS proxy --
+    yet another independent provider/IP range."""
+    try:
+        proxied = "https://api.codetabs.com/v1/proxy?quest=" + urllib.parse.quote(url, safe="")
+        resp = SESSION.get(proxied, timeout=12)
+        if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
+            print(f"DEBUG: [DSSSB/{category}] codetabs failed: HTTP {resp.status_code}")
+            return []
+        html = resp.text
+    except Exception as e:
+        print(f"DEBUG: [DSSSB/{category}] codetabs error: {e}")
+        return []
+
+    found = _extract_dsssb_links_from_html(html, category)
+    print(f"DEBUG: [DSSSB/{category}] codetabs found {len(found)} document link(s).")
+    return found
+
+
+def extract_dsssb_records_via_corsproxy(url, category):
+    """FALLBACK #4 (free, no signup): corsproxy.io -- another independent
+    free proxy, no API key needed."""
+    try:
+        proxied = "https://corsproxy.io/?url=" + urllib.parse.quote(url, safe="")
+        resp = SESSION.get(proxied, timeout=12)
+        if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
+            print(f"DEBUG: [DSSSB/{category}] corsproxy.io failed: HTTP {resp.status_code}")
+            return []
+        html = resp.text
+    except Exception as e:
+        print(f"DEBUG: [DSSSB/{category}] corsproxy.io error: {e}")
+        return []
+
+    found = _extract_dsssb_links_from_html(html, category)
+    print(f"DEBUG: [DSSSB/{category}] corsproxy.io found {len(found)} document link(s).")
+    return found
+
+
+SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "").strip()
+
+
+def extract_dsssb_records_via_scraperapi(url, category):
+    """FALLBACK #3 -- OPTIONAL, opt-in only (requires SCRAPER_API_KEY).
+
+    Comprehensive research (industry guides, ScrapFly's govt-scraping
+    write-up, ScrapeOps' 2026 Cloudflare-bypass benchmark, several vendor
+    case studies) all converge on the same conclusion for this EXACT
+    scenario -- ".gov site blocks datacenter IPs, free/anonymous proxies
+    also get blocked, only genuine rotating/residential-grade proxy
+    infrastructure gets through reliably." Free anonymous services (Jina,
+    allorigins) sit on well-known, already-blocklisted ranges themselves,
+    which matches exactly what we observed (both failing with different
+    error signatures, consistent with datacenter-IP reputation blocking
+    rather than a simple single-IP ban).
+
+    ScraperAPI (and equivalents like ScrapingBee/Scrape.do/ZenRows) offer
+    real rotating proxy pools with automatic retry specifically built for
+    this. Free tier: 5,000 one-time + 1,000/month recurring credits --
+    enough for meaningful DSSSB coverage without paying, as long as check
+    frequency is kept reasonable (see DSSSB_CHECK_EVERY_N_RUNS below).
+
+    This function does NOTHING unless the user opts in by setting
+    SCRAPER_API_KEY (get a free key at https://www.scraperapi.com/) --
+    the system stays 100% free by default, exactly as before, with this
+    purely as an optional upgrade path.
+    """
+    found = []
+    if not SCRAPER_API_KEY:
+        return found
+
+    try:
+        resp = SESSION.get(
+            "https://api.scraperapi.com/",
+            params={"api_key": SCRAPER_API_KEY, "url": url},
+            timeout=35,
+        )
+        if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
+            print(f"DEBUG: [DSSSB/{category}] ScraperAPI failed: HTTP {resp.status_code}")
+            return found
+        html = resp.text
+    except Exception as e:
+        print(f"DEBUG: [DSSSB/{category}] ScraperAPI error: {e}")
+        return found
+
+    found = _extract_dsssb_links_from_html(html, category)
+    print(f"DEBUG: [DSSSB/{category}] ScraperAPI found {len(found)} document link(s).")
+    return found
+
+
 def fetch_dsssb_via_fallback_chain(url, category):
-    """Tries both proxy fallbacks in order, stopping at the first that
-    returns anything. Two independent providers/architectures roughly
-    doubles the odds that at least one gets through DSSSB's blocking."""
-    records = extract_dsssb_records_via_reader(url, category)
-    if records:
-        return records
-    records = extract_dsssb_records_via_allorigins(url, category)
-    if records:
-        return records
-    print(f"DEBUG: [DSSSB/{category}] Both fallback proxies failed — "
+    """Tries every FREE proxy fallback in order first, stopping at the
+    first that returns anything. ScraperAPI (paid-tier infra, free
+    credits) only runs at the very end, and only if the user opted in
+    with SCRAPER_API_KEY -- by default this entire chain costs ₹0 and
+    needs no signup at all."""
+    for fn in (
+        extract_dsssb_records_via_reader,
+        extract_dsssb_records_via_allorigins,
+        extract_dsssb_records_via_codetabs,
+        extract_dsssb_records_via_corsproxy,
+    ):
+        records = fn(url, category)
+        if records:
+            return records
+
+    if SCRAPER_API_KEY:
+        records = extract_dsssb_records_via_scraperapi(url, category)
+        if records:
+            return records
+
+    print(f"DEBUG: [DSSSB/{category}] All fallback proxies failed — "
           f"this page will be retried on the next run.")
     return []
 
@@ -1150,8 +1259,8 @@ def main():
 
     # One-time, automatic migration: old keys were plain links (SSC-only
     # era). Prefix them with "SSC:" so they're never re-treated as new.
-    if seen and not all(k.startswith("SSC:") or k.startswith("DSSSB:") for k in seen):
-        seen = {(k if (k.startswith("SSC:") or k.startswith("DSSSB:")) else f"SSC:{k}"): v
+    if seen and not all(k.startswith(("SSC:", "DSSSB:", "_")) for k in seen):
+        seen = {(k if k.startswith(("SSC:", "DSSSB:", "_")) else f"SSC:{k}"): v
                 for k, v in seen.items()}
 
     print(f"DEBUG: {len(seen)} notices already marked as seen from previous runs.")
@@ -1170,8 +1279,23 @@ def main():
         print("DEBUG: ==== Fetching SSC ====")
         ssc_notices = fetch_ssc(page)
 
-        print("DEBUG: ==== Fetching DSSSB ====")
-        dsssb_notices = fetch_dsssb(page)
+        # Throttled DSSSB check -- reserved key "_dsssb_run_counter" in
+        # seen_notices.json (never collides with real "SSC:"/"DSSSB:"
+        # keys). Only matters if DSSSB_CHECK_EVERY_N_RUNS > 1 (i.e. the
+        # user is conserving ScraperAPI free credits); default behavior
+        # (=1) checks DSSSB every single run, same as before.
+        counter_entry = seen.get("_dsssb_run_counter", {})
+        run_number = counter_entry.get("count", 0) if isinstance(counter_entry, dict) else 0
+        seen["_dsssb_run_counter"] = {"count": run_number + 1}
+
+        if run_number % DSSSB_CHECK_EVERY_N_RUNS == 0:
+            print("DEBUG: ==== Fetching DSSSB ====")
+            dsssb_notices = fetch_dsssb(page)
+        else:
+            print(f"DEBUG: ==== Skipping DSSSB this run (run #{run_number}, "
+                  f"checking every {DSSSB_CHECK_EVERY_N_RUNS} runs to conserve "
+                  f"API credits) ====")
+            dsssb_notices = []
 
         browser.close()
 
