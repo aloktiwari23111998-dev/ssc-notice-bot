@@ -663,6 +663,62 @@ def extract_dsssb_records(page, category):
     return found
 
 
+def extract_dsssb_records_via_reader(url, category):
+    """FALLBACK for when direct browser navigation to DSSSB fails.
+
+    Confirmed root cause: DSSSB's server appears to block connections from
+    GitHub Actions' datacenter IP ranges (net::ERR_CONNECTION_TIMED_OUT) --
+    a common practice on Indian government sites -- even though the site
+    is fully reachable from normal/residential networks. No amount of
+    Playwright timeout/wait-strategy tuning fixes a blocked TCP connection.
+
+    Workaround: fetch the page through the free Jina Reader proxy
+    (https://r.jina.ai/<url>), which renders the page server-side on
+    Jina's own infrastructure (a different IP range, not blocked) and
+    returns clean Markdown. Jina Reader converts HTML to Markdown via
+    Readability + Turndown, so every document link comes back in standard
+    "[link text](https://...)" syntax -- we parse that directly with
+    plain `requests`, no browser needed for this path at all.
+    """
+    found = []
+    try:
+        resp = SESSION.get(f"https://r.jina.ai/{url}", timeout=30)
+        if resp.status_code != 200 or not resp.text:
+            print(f"DEBUG: [DSSSB/{category}] Reader-proxy fallback failed: "
+                  f"HTTP {resp.status_code}")
+            return found
+        text = resp.text
+    except Exception as e:
+        print(f"DEBUG: [DSSSB/{category}] Reader-proxy fallback error: {e}")
+        return found
+
+    link_pattern = re.compile(r"\[([^\]]*)\]\((https?://[^\s\)]+)\)")
+    for line in text.split("\n"):
+        for m in link_pattern.finditer(line):
+            link_text, link_url = m.group(1).strip(), m.group(2).strip()
+            link_url_lower = link_url.lower()
+            if not (link_url_lower.endswith(FILE_EXTENSIONS) or "attachment" in link_url_lower):
+                continue
+
+            rest_of_line = link_pattern.sub(" ", line).strip()
+            title_source = rest_of_line if len(rest_of_line) >= 8 else link_text
+            title = clean_dsssb_title(title_source)
+            if len(title) < 8:
+                continue
+
+            found.append({
+                "title": title,
+                "link": link_url,
+                "category": category,
+                "file_name": link_url.rsplit("/", 1)[-1],
+                "download_candidates": [link_url],
+                "source": "DSSSB",
+            })
+
+    print(f"DEBUG: [DSSSB/{category}] Reader-proxy fallback found {len(found)} document link(s).")
+    return found
+
+
 def fetch_dsssb_page(page, category, url):
     """Loads one DSSSB page and extracts its notices.
 
@@ -706,10 +762,15 @@ def fetch_dsssb_page(page, category, url):
     page.on("response", handle_response)
     page_loaded = True
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=25000)
-        page.wait_for_timeout(1200)
+        # Timeout chhota rakha (12s, pehle 25s tha) -- GitHub Actions se
+        # DSSSB block hone ki wajah se ye almost hamesha fail hoga, isliye
+        # jaldi fail karke reader-proxy fallback pe switch karna behtar
+        # hai, poora 25s waste karne se.
+        page.goto(url, wait_until="domcontentloaded", timeout=12000)
+        page.wait_for_timeout(1000)
     except Exception as e:
-        print(f"WARNING: [DSSSB/{category}] Failed to load {url}: {e}")
+        print(f"WARNING: [DSSSB/{category}] Direct browser load failed ({e}). "
+              f"Falling back to Jina Reader proxy...")
         page_loaded = False
     finally:
         try:
@@ -744,7 +805,7 @@ def fetch_dsssb_page(page, category, url):
     if page_loaded:
         dom_notices = extract_dsssb_records(page, category)
     else:
-        print(f"DEBUG: [DSSSB/{category}] Skipping DOM scan since page failed to load.")
+        dom_notices = extract_dsssb_records_via_reader(url, category)
 
     combined = {}
     for n in api_notices + dom_notices:
@@ -767,8 +828,8 @@ def discover_dsssb_pages(page):
     growth if the nav menu is large or noisy."""
     discovered = {}
     try:
-        page.goto(DSSSB_BASE + "/", wait_until="domcontentloaded", timeout=20000)
-        page.wait_for_timeout(800)
+        page.goto(DSSSB_BASE + "/", wait_until="domcontentloaded", timeout=12000)
+        page.wait_for_timeout(600)
         nav_links = page.query_selector_all(
             "nav a[href], header a[href], .menu a[href], .navbar a[href], .main-menu a[href]"
         )
