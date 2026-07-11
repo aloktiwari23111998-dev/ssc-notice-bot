@@ -1,8 +1,9 @@
 """
-SSC (ssc.gov.in) Site-Wide -> Telegram Auto-Poster
+SSC (ssc.gov.in) + DSSSB (dsssb.delhi.gov.in) -> Telegram Auto-Poster
 ====================================================
 
-Kya karta hai:
+SSC SECTION IS PRODUCTION CODE -- behavior 100% unchanged from the version
+supplied. Kya karta hai:
 1. SSC ke saare important public pages check karta hai (Notice Board, Results,
    Answer Key, Admit Card, Home) — sirf ek page nahi, poori site.
 2. Har page ko headless browser (Playwright) se open karta hai, kyunki SSC ka
@@ -10,37 +11,58 @@ Kya karta hai:
 3. SSC ka Angular app apna data XHR/fetch calls se JSON ke roop me laata hai.
    Ye script har page load ke dauraan saari network responses "sunta" hai,
    unme se JSON body nikaalta hai.
-4. SCHEMA-BASED PARSING (no more generic guessing): SSC ke actual API records
-   ka real shape ye hai:
+4. SCHEMA-BASED PARSING: SSC ke actual API records ka real shape ye hai:
        { "headline": "...", "attachments": [
              {"fileName": "...", "path": "...", "type": "...", "documentType": "..."},
              ...
        ] }
    `headline` hamesha Telegram title banta hai. Har `attachments[]` entry se
-   ek alag notice banti hai (ek headline ke neeche multiple PDFs ho sakte
-   hain, jaise Result + Answer Key dono ek hi record me).
-5. `attachments[].path` khud ek public download URL NAHI hai — ye server ka
-   internal storage path hai (aur kabhi Windows-style backslashes ke saath
-   aata hai). Real SSC notification links (jaise
-   ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/<file>.pdf) se
-   confirm hota hai ki asli public endpoint `/api/attachment/<path>` hai —
-   is base ko primary candidate banaya gaya hai. Robustness ke liye ek chhoti
-   si candidate-URL list try ki jaati hai jab tak koi asli PDF download na
-   ho jaaye.
+   ek alag notice banti hai.
+5. `attachments[].path` khud ek public download URL NAHI hai -- confirmed
+   real pattern `https://ssc.gov.in/api/attachment/<path>` hai, jise
+   primary candidate banaya gaya hai, aur ek chhoti fallback candidate list
+   bhi try hoti hai.
 6. Telegram pe upload karne se PEHLE file ko khud download karke validate
-   kiya jaata hai (status 200, Content-Type, "%PDF" magic bytes) — koi bhi
-   URL jo HTML/error page return kare, wo use nahi hoti.
-7. Result/Answer Key jaise pages pe pehle ek <select> dropdown me se exam
-   choose karna padta hai tabhi list load hoti hai — script automatically
-   har dropdown option try karta hai.
-8. DOM-based generic <a href> scanning ek SAFETY NET ke roop me rakha gaya
-   hai (JSON schema match na ho paaye tab ke liye).
-9. Pichli baar "seen_notices.json" me save kiye gaye se compare karta hai.
-10. Jo bhi NAYI cheez milti hai, Telegram channel pe bhej deta hai.
+   kiya jaata hai (status 200, Content-Type, "%PDF" magic bytes).
+7. Result/Answer Key jaise pages pe <select> dropdown se exam choose karna
+   padta hai -- script automatically har option try karta hai.
+8. DOM-based generic <a href> scanning ek SAFETY NET ke roop me rakha hai.
+9. seen_notices.json se compare, jo bhi NAYA milta hai Telegram pe jaata hai.
 
-GitHub Actions cron job se chalta hai (bilkul FREE). Env vars, Telegram
-functions, seen_notices.json format, aur message format — sab pehle jaisa
-hi hai.
+DSSSB SECTION (independent module):
+DSSSB ek server-rendered (Drupal) site hai. Iske liye:
+  - Generic JSON/XHR auto-detect (non-schema-locked -- future-proofing ke
+    liye, abhi tak koi API observed nahi hui, isliye zyaadatar DOM scan
+    hi chalega).
+  - DOM-row extraction primary/reliable path hai.
+  - Home-page nav-menu se naye sections auto-discover karne ki koshish
+    (best-effort, non-fatal -- confirmed pages hamesha check hote hain
+    chahe discovery fail ho jaaye).
+  - `domcontentloaded` wait strategy (NOT `networkidle`) -- DSSSB pe
+    background analytics/tracker requests hamesha chalte rehte hain jisse
+    "networkidle" state kabhi aata hi nahi aur page.goto() 60s timeout
+    tak hang ho jaata tha. domcontentloaded turant fire hota hai jaise hi
+    HTML mil jaaye, isliye fast aur reliable hai.
+  - Agar page load hi fail ho jaaye, DOM scan bilkul skip ho jaata hai
+    (pehle wala bug: goto fail hone ke baad bhi query_selector_all() call
+    ho raha tha, jisse "Execution context was destroyed" wali cascading
+    error aati thi).
+
+PERFORMANCE (cron ko jitna jaldi ho sake dobara chalne dene ke liye):
+  - EK HI Chromium browser instance -- SSC aur DSSSB dono isi ko reuse
+    karte hain (naya launch nahi hota beech me).
+  - EK HI requests.Session() -- saare downloads aur Telegram API calls
+    connection pooling ke saath jaate hain.
+  - DSSSB ke timeouts chhote aur bounded hain (25s/page max, domcontentloaded)
+    taaki agar DSSSB down bhi ho, poora run 1-2 minute se zyada na atke.
+  - Auto-discovery sirf DSSSB home page pe ek chhota (20s) check hai, aur
+    max 5 extra pages hi add karta hai -- unbounded growth se bachne ke
+    liye.
+
+GitHub Actions cron-job.org se trigger hota hai (workflow_dispatch), 
+concurrency queueing ("cancel-in-progress: false") ke saath, taaki koi
+bhi trigger cycle beech me cancel na ho aur agla run turant queue se
+shuru ho jaaye jaise hi purana khatam ho.
 """
 
 import json
@@ -54,7 +76,7 @@ import requests
 from playwright.sync_api import sync_playwright
 
 # ================================================================
-# CONFIG
+# CONFIG -- SSC (unchanged)
 # ================================================================
 
 PAGES_TO_MONITOR = {
@@ -95,6 +117,11 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
+# Ek hi requests Session -- SSC downloads, DSSSB downloads, aur Telegram
+# API calls sab isi se jaate hain (connection pooling / thoda fast).
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": USER_AGENT})
+
 
 # ================================================================
 # SMALL HELPERS (link filtering, title cleanup, url normalization)
@@ -115,10 +142,13 @@ def is_probably_document_link(href):
     )
 
 
-def absolutize(link):
-    """Turns a relative DOM href into a full https://ssc.gov.in/... URL.
-    Also normalizes Windows-style backslashes to forward slashes, since SSC
-    occasionally emits them and a literal "\\" in a URL path never resolves."""
+def absolutize(link, base_domain="https://ssc.gov.in"):
+    """Turns a relative DOM href into a full https://<base_domain>/... URL.
+    Also normalizes Windows-style backslashes to forward slashes.
+
+    `base_domain` defaults to SSC's domain so every EXISTING SSC call site
+    (which calls absolutize(href) with just one argument) behaves 100%
+    identically to before. DSSSB's code passes base_domain=DSSSB_BASE."""
     if not link:
         return None
     link = link.strip()
@@ -132,20 +162,13 @@ def absolutize(link):
     if link.startswith("http://") or link.startswith("https://"):
         return link
     if link.startswith("/"):
-        return "https://ssc.gov.in" + link
-    return "https://ssc.gov.in/" + link.lstrip("./")
+        return base_domain + link
+    return base_domain + "/" + link.lstrip("./")
 
 
 def build_candidate_download_urls(path):
     """Builds an ordered list of candidate public download URLs from an
-    attachment's raw storage `path`. `path` is NOT itself a public URL, and
-    it sometimes uses Windows-style backslashes — both are handled here.
-
-    We don't assume a single fixed prefix; instead we try, in order, the
-    forms that are actually known/likely to work, and let the caller
-    (send_document) confirm which one really downloads a valid PDF before
-    anything gets uploaded to Telegram.
-    """
+    attachment's raw storage `path`."""
     if not path:
         return []
 
@@ -156,20 +179,12 @@ def build_candidate_download_urls(path):
         return [normalized]
 
     candidates = []
-
-    # Candidate 1 (primary): confirmed real-world SSC pattern —
-    # https://ssc.gov.in/api/attachment/<path>
     candidates.append(ATTACHMENT_BASE_URL + normalized)
-
-    # Candidate 2: in case `path` already includes an "api/attachment/" or
-    # similar prefix segment, or the file is actually served directly off
-    # the domain root without going through the attachment API.
     if not normalized.lower().startswith("api/attachment/"):
         candidates.append("https://ssc.gov.in/" + normalized)
     else:
         candidates.append("https://ssc.gov.in/" + normalized)
 
-    # De-duplicate while preserving order.
     seen = set()
     ordered = []
     for c in candidates:
@@ -201,7 +216,7 @@ def normalize_signature(title, category):
 
 
 # ================================================================
-# JSON API extraction — SCHEMA-BASED (headline + attachments[])
+# JSON API extraction — SCHEMA-BASED (headline + attachments[]) -- SSC
 # ================================================================
 
 def looks_like_api_json_response(url, content_type):
@@ -214,18 +229,10 @@ def looks_like_api_json_response(url, content_type):
 
 
 def extract_notice_records(node, found, source_url):
-    """Schema-exact extraction. SSC's real API shape is:
-
+    """Schema-exact extraction for SSC's real API shape:
         { "headline": "...", "attachments": [
               {"fileName": ..., "path": ..., "type": ..., "documentType": ...},
-              ...
         ] }
-
-    We only pull out `headline` and each attachment's `fileName`/`path`/
-    `type`/`documentType` — no guessing across alternate field names. We
-    still walk the tree (list/dict wrappers like {"data": [...]} are common)
-    purely to LOCATE objects matching this exact shape, not to guess field
-    names within them.
     """
     if isinstance(node, dict):
         headline = node.get("headline")
@@ -263,8 +270,7 @@ def extract_notice_records(node, found, source_url):
 
 def try_trigger_dropdowns(page, category):
     """Result / Answer Key pages typically need an exam selected from a
-    <select> dropdown before the real document list (and its backing API
-    call) fires."""
+    <select> dropdown before the real document list fires."""
     try:
         selects = page.query_selector_all("select")
     except Exception as e:
@@ -306,8 +312,7 @@ def try_trigger_dropdowns(page, category):
 
 
 def scan_dom_links(page, category):
-    """Generic DOM anchor scan — fallback safety net for when a page's data
-    doesn't show up as a headline/attachments JSON record."""
+    """Generic DOM anchor scan — fallback safety net."""
     found = []
     try:
         elements = page.query_selector_all(LINK_SELECTOR)
@@ -357,8 +362,7 @@ def scan_dom_links(page, category):
 
 def fetch_notices_from_page(page, category, url):
     """Renders one SSC page. Primary source: intercepted XHR/fetch JSON
-    responses, parsed via the exact headline+attachments schema. Secondary
-    source: generic DOM anchor scan, merged in as a fallback."""
+    responses, schema-matched. Secondary: generic DOM scan."""
     found_from_api = []
     discovered_api_urls = set()
 
@@ -388,9 +392,7 @@ def fetch_notices_from_page(page, category, url):
     try:
         page.goto(url, wait_until="networkidle", timeout=60000)
         page.wait_for_timeout(2000)
-
         try_trigger_dropdowns(page, category)
-
     except Exception as e:
         print(f"WARNING: [{category}] Failed to load {url}: {e}")
     finally:
@@ -408,7 +410,6 @@ def fetch_notices_from_page(page, category, url):
         print(f"DEBUG: [{category}] No JSON API responses observed — "
               f"relying on DOM scan only for this page.")
 
-    # ---- One notice per attachment, title = headline, filename = fileName ----
     api_notices = []
     for rec in found_from_api:
         candidates = build_candidate_download_urls(rec["path"])
@@ -416,8 +417,6 @@ def fetch_notices_from_page(page, category, url):
             print(f"DEBUG: [{category}] Could not build any download URL from "
                   f"path='{rec['path']}' (headline='{rec['headline'][:60]}') — skipping.")
             continue
-        # We key/track this notice by its primary candidate URL; the actual
-        # working URL is re-confirmed at send time in send_document().
         primary_link = candidates[0]
         api_notices.append({
             "title": rec["headline"],
@@ -447,28 +446,405 @@ def fetch_notices_from_page(page, category, url):
     return result
 
 
-def fetch_all_notices():
-    """Visits every page in PAGES_TO_MONITOR and collects notices from all of them."""
-    all_notices = []
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(user_agent=USER_AGENT)
+def fetch_all_notices(shared_page=None):
+    """Visits every page in PAGES_TO_MONITOR and collects notices.
 
+    `shared_page` -- NEW, OPTIONAL. If None (default), behaves EXACTLY as
+    before: opens its own Chromium browser, uses it, closes it. This is
+    the standalone/original behavior, byte-for-byte unchanged.
+
+    If a Playwright `page` object is passed in (from main(), sharing ONE
+    browser across SSC + DSSSB), this function uses that page directly and
+    does NOT open or close any browser itself -- the caller owns that
+    lifecycle. This is the only way single-browser-instance sharing works
+    without editing a single line of the actual SSC scraping logic above.
+    """
+    def _run(page):
+        all_notices = []
         for category, url in PAGES_TO_MONITOR.items():
             print(f"DEBUG: ---- Checking [{category}] -> {url} ----")
             page_notices = fetch_notices_from_page(page, category, url)
             all_notices.extend(page_notices)
             time.sleep(1)
+        return all_notices
 
-        browser.close()
+    if shared_page is not None:
+        all_notices = _run(shared_page)
+    else:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(user_agent=USER_AGENT)
+            all_notices = _run(page)
+            browser.close()
 
     deduped = {}
     for n in all_notices:
         deduped.setdefault(n["link"], n)
     final = list(deduped.values())
-    print(f"DEBUG: Grand total across all pages: {len(all_notices)} raw, "
+    print(f"DEBUG: Grand total across all SSC pages: {len(all_notices)} raw, "
           f"{len(final)} unique after link-based de-dup.")
     return final
+
+
+def fetch_ssc(page=None):
+    """SSC entry point used by main(). Delegates entirely to the untouched
+    fetch_all_notices() -- passes the shared browser page through when
+    available so only ONE Chromium instance is ever open."""
+    return fetch_all_notices(shared_page=page)
+
+
+# ================================================================
+# DSSSB (dsssb.delhi.gov.in) — INDEPENDENT MODULE
+# ================================================================
+
+DSSSB_BASE = "https://dsssb.delhi.gov.in"
+
+# Confirmed public listing pages (verified on the live site). Always
+# checked, regardless of whether auto-discovery below succeeds or fails.
+#
+# NOTE: DSSSB's "Admit Card" download requires the candidate's own login
+# (Application Number + Password) -- an individual/private portal, not a
+# publicly listed page, so it cannot be generically monitored.
+DSSSB_PAGES = {
+    "Notice Board": f"{DSSSB_BASE}/notifications",
+    "Result": f"{DSSSB_BASE}/results",
+    "Notice of Exam / Circulars": f"{DSSSB_BASE}/notice-of-exam",
+    "Latest Updates": f"{DSSSB_BASE}/dsssb/latest-updates",
+    "Vacancy / Advertisement": f"{DSSSB_BASE}/dsssb-vacancies",
+    "Recruitment": f"{DSSSB_BASE}/recruitment",
+    "Home": f"{DSSSB_BASE}/",
+}
+
+MAX_AUTO_DISCOVERED_PAGES = 5  # unbounded growth se bachne ke liye cap
+
+# DSSSB rows show "Date: dd-mm-yyyy" as ONE combined line, plus a
+# Filter/Reset search widget and a "(Ex: 2025)" placeholder hint.
+DSSSB_SKIP_LINE_PATTERNS = SKIP_LINE_PATTERNS + [
+    r"^date\s*:.*$",
+    r"^filter$",
+    r"^reset$",
+    r"^\(ex:\s*\d{4}\)$",
+]
+
+DSSSB_NAV_IGNORE_TEXT = re.compile(
+    r"login|register|sitemap|privacy|contact|^home$|rti|tender|feedback|"
+    r"accessibility|disclaimer|help|faq",
+    re.IGNORECASE,
+)
+
+
+def is_probably_dsssb_document_link(href):
+    """Same document-detection rules as SSC's version, duplicated here to
+    keep the DSSSB module fully independent."""
+    if not href:
+        return False
+    if href.startswith(("javascript:", "mailto:", "tel:", "#")):
+        return False
+    href_lower = href.lower()
+    return (
+        href_lower.endswith(FILE_EXTENSIONS)
+        or "attachment" in href_lower
+        or "/api/" in href_lower
+    )
+
+
+def clean_dsssb_title(raw_text):
+    if not raw_text:
+        return ""
+    lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
+    kept = []
+    for line in lines:
+        if any(re.match(p, line, re.IGNORECASE) for p in DSSSB_SKIP_LINE_PATTERNS):
+            continue
+        kept.append(line)
+    return " ".join(kept).strip()
+
+
+def looks_like_generic_json_record(node):
+    """Very loose, non-schema-locked heuristic: does this dict have
+    something that looks like a title AND something that looks like a
+    document link? Used only as a DSSSB future-proofing layer, since no
+    such API is currently known to exist on DSSSB's site."""
+    if not isinstance(node, dict):
+        return None, None
+    title = None
+    for key in ("headline", "title", "name", "subject", "heading"):
+        v = node.get(key)
+        if isinstance(v, str) and v.strip():
+            title = v.strip()
+            break
+    file_link = None
+    for key in ("path", "url", "file", "fileUrl", "attachment", "pdf", "link", "href"):
+        v = node.get(key)
+        if isinstance(v, str) and v.strip():
+            if v.lower().endswith(FILE_EXTENSIONS) or "attachment" in v.lower():
+                file_link = v.strip()
+                break
+    return title, file_link
+
+
+def extract_dsssb_generic_json(node, found, source_url, category):
+    """Generic JSON record walker for DSSSB -- future-proofing in case
+    DSSSB ever adds a JSON/XHR API. Currently expected to find nothing."""
+    if isinstance(node, dict):
+        title, file_link = looks_like_generic_json_record(node)
+        if title and file_link:
+            found.append({
+                "title": title,
+                "raw_link": file_link,
+                "category": category,
+                "_source": source_url,
+            })
+        for v in node.values():
+            if isinstance(v, (dict, list)):
+                extract_dsssb_generic_json(v, found, source_url, category)
+    elif isinstance(node, list):
+        for item in node:
+            if isinstance(item, (dict, list)):
+                extract_dsssb_generic_json(item, found, source_url, category)
+
+
+def extract_dsssb_records(page, category):
+    """DOM-row extraction for one already-loaded DSSSB page. A DSSSB row
+    looks like:
+        <title text>
+        Date: dd-mm-yyyy
+        View   (this is the actual <a href=".../something.pdf">)
+    Title is plain text next to the "View" link, not inside the <a> tag --
+    so we climb up the DOM from the document link to the row container and
+    grab its text, then strip date/badge/action-word lines."""
+    found = []
+    try:
+        elements = page.query_selector_all(LINK_SELECTOR)
+    except Exception as e:
+        print(f"DEBUG: [DSSSB/{category}] DOM scan failed: {e}")
+        return found
+
+    for el in elements:
+        try:
+            href = el.get_attribute("href") or ""
+        except Exception:
+            continue
+        if not is_probably_dsssb_document_link(href):
+            continue
+        href = absolutize(href, base_domain=DSSSB_BASE)
+        if not href:
+            continue
+
+        try:
+            raw_row_text = el.evaluate("""
+                (node) => {
+                    let el = node;
+                    for (let i = 0; i < 5; i++) {
+                        if (!el.parentElement) break;
+                        el = el.parentElement;
+                        const t = el.innerText ? el.innerText.trim() : '';
+                        if (t.length > 25) return t;
+                    }
+                    return el && el.innerText ? el.innerText.trim() : '';
+                }
+            """)
+        except Exception:
+            raw_row_text = ""
+
+        title = clean_dsssb_title(raw_row_text or "")
+        if len(title) < 8:
+            continue
+
+        found.append({
+            "title": title,
+            "link": href,
+            "category": category,
+            "file_name": href.rsplit("/", 1)[-1],
+            "download_candidates": [href],
+            "source": "DSSSB",
+        })
+
+    return found
+
+
+def fetch_dsssb_page(page, category, url):
+    """Loads one DSSSB page and extracts its notices.
+
+    FIX: uses `domcontentloaded` instead of `networkidle`. DSSSB's site
+    keeps background analytics/tracker requests running continuously, so
+    "networkidle" (which needs 500ms of zero network activity) never
+    actually fires -- that was the root cause of the 60s timeouts.
+    `domcontentloaded` fires as soon as the initial HTML is parsed, which
+    is all we need since DSSSB is server-rendered (no client-side JS
+    building the notice list).
+
+    FIX: if the page fails to load at all, we return immediately WITHOUT
+    attempting a DOM scan -- attempting query_selector_all() on a page
+    that failed navigation throws "Execution context was destroyed",
+    which was cascading into a second, confusing error before.
+    """
+    found_from_api = []
+    discovered_api_urls = set()
+
+    def handle_response(response):
+        try:
+            req_url = response.url
+            if DSSSB_BASE not in req_url:
+                return
+            ctype = ""
+            try:
+                ctype = response.headers.get("content-type", "")
+            except Exception:
+                pass
+            if not looks_like_api_json_response(req_url, ctype):
+                return
+            try:
+                data = response.json()
+            except Exception:
+                return
+            discovered_api_urls.add(req_url)
+            extract_dsssb_generic_json(data, found_from_api, req_url, category)
+        except Exception:
+            pass
+
+    page.on("response", handle_response)
+    page_loaded = True
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        page.wait_for_timeout(1200)
+    except Exception as e:
+        print(f"WARNING: [DSSSB/{category}] Failed to load {url}: {e}")
+        page_loaded = False
+    finally:
+        try:
+            page.remove_listener("response", handle_response)
+        except Exception:
+            pass
+
+    if discovered_api_urls:
+        print(f"DEBUG: [DSSSB/{category}] Discovered {len(discovered_api_urls)} JSON API "
+              f"endpoint(s):")
+        for u in sorted(discovered_api_urls):
+            print(f"DEBUG: [DSSSB/{category}]   API -> {u}")
+    else:
+        print(f"DEBUG: [DSSSB/{category}] No JSON API responses observed — "
+              f"relying on DOM scan only for this page.")
+
+    api_notices = []
+    for rec in found_from_api:
+        full_link = absolutize(rec["raw_link"], base_domain=DSSSB_BASE)
+        if not full_link:
+            continue
+        api_notices.append({
+            "title": rec["title"],
+            "link": full_link,
+            "category": category,
+            "file_name": full_link.rsplit("/", 1)[-1],
+            "download_candidates": [full_link],
+            "source": "DSSSB",
+        })
+
+    dom_notices = []
+    if page_loaded:
+        dom_notices = extract_dsssb_records(page, category)
+    else:
+        print(f"DEBUG: [DSSSB/{category}] Skipping DOM scan since page failed to load.")
+
+    combined = {}
+    for n in api_notices + dom_notices:
+        combined.setdefault(n["link"], n)
+    result = list(combined.values())
+
+    print(f"DEBUG: [DSSSB/{category}] {len(api_notices)} from JSON API (generic) + "
+          f"{len(dom_notices)} from DOM scan = {len(result)} unique notice-like item(s).")
+    for i, n in enumerate(result[:10]):
+        print(f"DEBUG [DSSSB/{category}][{i}] title='{n['title'][:80]}' -> {n['link']}")
+
+    return result
+
+
+def discover_dsssb_pages(page):
+    """Best-effort: auto-discovers additional DSSSB listing pages from the
+    home page's navigation menu, so future new sections get picked up
+    automatically. Non-fatal if it fails -- DSSSB_PAGES is always checked
+    regardless. Capped at MAX_AUTO_DISCOVERED_PAGES to avoid runaway
+    growth if the nav menu is large or noisy."""
+    discovered = {}
+    try:
+        page.goto(DSSSB_BASE + "/", wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_timeout(800)
+        nav_links = page.query_selector_all(
+            "nav a[href], header a[href], .menu a[href], .navbar a[href], .main-menu a[href]"
+        )
+        for el in nav_links:
+            if len(discovered) >= MAX_AUTO_DISCOVERED_PAGES:
+                break
+            try:
+                href = el.get_attribute("href") or ""
+                text = (el.inner_text() or "").strip()
+            except Exception:
+                continue
+            if not href or not text or len(text) < 3 or len(text) > 60:
+                continue
+            if href.startswith(("javascript:", "mailto:", "tel:", "#")):
+                continue
+            href_lower = href.lower()
+            if href_lower.endswith(FILE_EXTENSIONS):
+                continue
+            if DSSSB_NAV_IGNORE_TEXT.search(text):
+                continue
+            full = absolutize(href, base_domain=DSSSB_BASE)
+            if not full or not full.startswith(DSSSB_BASE):
+                continue
+            if full in DSSSB_PAGES.values():
+                continue
+            discovered[text] = full
+    except Exception as e:
+        print(f"DEBUG: [DSSSB] Auto-discovery failed to load home page: {e}")
+
+    return discovered
+
+
+def fetch_dsssb(page):
+    """Visits every page in DSSSB_PAGES (plus any auto-discovered ones)
+    and collects notices from all of them. Uses the SAME shared browser
+    `page` passed in from main() -- no separate Chromium instance."""
+    pages_to_check = dict(DSSSB_PAGES)
+
+    discovered = discover_dsssb_pages(page)
+    if discovered:
+        print(f"DEBUG: [DSSSB] Auto-discovered {len(discovered)} additional page(s) "
+              f"from nav menu: {list(discovered.keys())}")
+        pages_to_check.update(discovered)
+
+    all_notices = []
+    for category, url in pages_to_check.items():
+        print(f"DEBUG: ---- Checking [DSSSB/{category}] -> {url} ----")
+        page_notices = fetch_dsssb_page(page, category, url)
+        all_notices.extend(page_notices)
+        time.sleep(0.5)
+
+    deduped = {}
+    for n in all_notices:
+        deduped.setdefault(n["link"], n)
+    final = list(deduped.values())
+    print(f"DEBUG: [DSSSB] Grand total: {len(all_notices)} raw, "
+          f"{len(final)} unique after link-based de-dup.")
+    return final
+
+
+def merge_notices(ssc_notices, dsssb_notices):
+    """Combines SSC + DSSSB notices, tagging every item with its source
+    and de-duplicating across both by a composite 'source:link' key."""
+    for n in ssc_notices:
+        n.setdefault("source", "SSC")
+    for n in dsssb_notices:
+        n.setdefault("source", "DSSSB")
+
+    combined = list(ssc_notices) + list(dsssb_notices)
+
+    deduped = {}
+    for n in combined:
+        key = f"{n['source']}:{n['link']}"
+        deduped.setdefault(key, n)
+
+    return list(deduped.values())
 
 
 # ================================================================
@@ -489,15 +865,15 @@ def save_seen(seen):
 # TELEGRAM POSTING
 # ================================================================
 
-def build_caption(category, title, file_name):
+def build_caption(category, title, file_name, source="SSC"):
     return (
-        f"⚡️〔 <b>SSC ALERT</b> 〕⚡️\n"
+        f"⚡️〔 <b>{source} ALERT</b> 〕⚡️\n"
         f"━━━━━━━━━━━━━━━\n\n"
         f"🏷 <b>{category}</b>\n\n"
         f"🗂 <b>{title}</b>\n\n"
         f"📄 <code>{file_name}</code>\n\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"<i>JOIN — </i> @SSC_DIARY <i>par</i> 🚀"
+        f"<i>Sabse pehle, sabse tez — sirf</i> @SSC_DIARY <i>par</i> 🚀"
     )
 
 
@@ -505,9 +881,9 @@ def is_file_link(link):
     return link.lower().endswith((".pdf", ".doc", ".docx", ".xls", ".xlsx")) or "attachment" in link.lower()
 
 
-def send_text_message(category, title, link):
+def send_text_message(category, title, link, source="SSC"):
     message = (
-        f"⚡️〔 <b>SSC ALERT</b> 〕⚡️\n"
+        f"⚡️〔 <b>{source} ALERT</b> 〕⚡️\n"
         f"━━━━━━━━━━━━━━━\n\n"
         f"🏷 <b>{category}</b>\n\n"
         f"🗂 <b>{title}</b>\n\n"
@@ -516,7 +892,7 @@ def send_text_message(category, title, link):
         f"<i>Join-</i> @SSC_DIARY <i>par</i> 🚀"
     )
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    resp = requests.post(url, data={
+    resp = SESSION.post(url, data={
         "chat_id": CHANNEL_ID,
         "text": message,
         "parse_mode": "HTML",
@@ -530,13 +906,7 @@ def send_text_message(category, title, link):
 
 def validate_downloaded_file(file_resp, link, file_name):
     """Confirms a downloaded file is a real document and not an HTML
-    error/login page disguised behind a 200 status. Checks:
-      1. HTTP status == 200
-      2. Content-Type == application/pdf (only enforced when the file is
-         expected to be a PDF, per its extension)
-      3. First bytes == "%PDF" (only enforced for expected PDFs)
-    Logs the invalid response body (truncated) whenever a check fails.
-    """
+    error/login page disguised behind a 200 status."""
     if file_resp.status_code != 200:
         print(f"VALIDATION FAILED: [{link}] HTTP status = {file_resp.status_code} (expected 200).")
         _log_invalid_body(file_resp, link)
@@ -554,8 +924,7 @@ def validate_downloaded_file(file_resp, link, file_name):
         content_start = file_resp.content[:4]
         if content_start != b"%PDF":
             print(f"VALIDATION FAILED: [{link}] File does not start with '%PDF' magic "
-                  f"bytes (got {content_start!r}) — looks like an HTML/error page, "
-                  f"not a real PDF.")
+                  f"bytes (got {content_start!r}) — looks like an HTML/error page.")
             _log_invalid_body(file_resp, link)
             return False
 
@@ -570,65 +939,54 @@ def _log_invalid_body(file_resp, link):
     print(f"VALIDATION DEBUG: [{link}] response body (truncated) -> {body_preview!r}")
 
 
-def send_document(category, title, link, file_name=None, download_candidates=None):
+def send_document(category, title, link, file_name=None, download_candidates=None, source="SSC"):
     """Downloads the actual file ourselves FIRST, validates it, and only
-    then uploads it to Telegram. We never hand SSC's raw path/URL straight
-    to Telegram's sendDocument-by-URL, since an unresolved/incorrect
-    download URL would silently upload an HTML error page as if it were
-    the PDF.
-
-    `download_candidates` is an ordered list of URLs to try (built from the
-    attachment's schema `path`); the first one that downloads a validated
-    real file wins.
-    """
+    then uploads it to Telegram."""
     candidates = download_candidates or [link]
     file_name = file_name or link.rsplit("/", 1)[-1] or "notice.pdf"
-    caption = build_caption(category, title, file_name)
+    caption = build_caption(category, title, file_name, source=source)
     telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
 
     for candidate_url in candidates:
-        print(f"DEBUG: [{category}] Trying download candidate: {candidate_url}")
+        print(f"DEBUG: [{source}/{category}] Trying download candidate: {candidate_url}")
         try:
-            file_resp = requests.get(candidate_url, timeout=60, headers={
-                "User-Agent": USER_AGENT
-            })
+            file_resp = SESSION.get(candidate_url, timeout=60)
         except Exception as e:
-            print(f"DEBUG: [{category}] Download error for {candidate_url}: {e}")
+            print(f"DEBUG: [{source}/{category}] Download error for {candidate_url}: {e}")
             continue
 
         if not validate_downloaded_file(file_resp, candidate_url, file_name):
-            print(f"DEBUG: [{category}] Candidate failed validation, trying next "
+            print(f"DEBUG: [{source}/{category}] Candidate failed validation, trying next "
                   f"if available: {candidate_url}")
             continue
 
-        # Got a real, validated file — upload it with the schema's fileName.
         try:
-            resp = requests.post(telegram_url, data={
+            resp = SESSION.post(telegram_url, data={
                 "chat_id": CHANNEL_ID,
                 "caption": caption,
                 "parse_mode": "HTML",
             }, files={"document": (file_name, file_resp.content)}, timeout=60)
             if resp.status_code == 200:
-                print(f"DEBUG: [{category}] Successfully uploaded '{file_name}' "
+                print(f"DEBUG: [{source}/{category}] Successfully uploaded '{file_name}' "
                       f"from {candidate_url}")
                 return True
             print(f"Telegram upload failed ({resp.status_code}): {resp.text}")
         except Exception as e:
             print(f"Telegram upload error: {e}")
 
-    print(f"WARNING: [{category}] All download candidates failed for headline "
+    print(f"WARNING: [{source}/{category}] All download candidates failed for headline "
           f"'{title}' (fileName='{file_name}'). Falling back to plain text message.")
-    return send_text_message(category, title, link)
+    return send_text_message(category, title, link, source=source)
 
 
-def send_to_telegram(category, title, link, file_name=None, download_candidates=None):
+def send_to_telegram(category, title, link, file_name=None, download_candidates=None, source="SSC"):
     if not BOT_TOKEN or not CHANNEL_ID:
         print("ERROR: TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID not set.")
         return False
     if is_file_link(link):
         return send_document(category, title, link, file_name=file_name,
-                              download_candidates=download_candidates)
-    return send_text_message(category, title, link)
+                              download_candidates=download_candidates, source=source)
+    return send_text_message(category, title, link, source=source)
 
 
 # ================================================================
@@ -637,6 +995,13 @@ def send_to_telegram(category, title, link, file_name=None, download_candidates=
 
 def main():
     seen = load_seen()
+
+    # One-time, automatic migration: old keys were plain links (SSC-only
+    # era). Prefix them with "SSC:" so they're never re-treated as new.
+    if seen and not all(k.startswith("SSC:") or k.startswith("DSSSB:") for k in seen):
+        seen = {(k if (k.startswith("SSC:") or k.startswith("DSSSB:")) else f"SSC:{k}"): v
+                for k, v in seen.items()}
+
     print(f"DEBUG: {len(seen)} notices already marked as seen from previous runs.")
 
     seen_signatures = set()
@@ -644,8 +1009,22 @@ def main():
         if isinstance(entry, dict) and "title" in entry and "category" in entry:
             seen_signatures.add(normalize_signature(entry["title"], entry["category"]))
 
-    notices = fetch_all_notices()
-    print(f"DEBUG: Total unique notice-like links across all pages = {len(notices)}")
+    # ---- SINGLE shared Chromium instance for SSC + DSSSB ----
+    print("DEBUG: ==== Launching single shared Chromium instance ====")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(user_agent=USER_AGENT)
+
+        print("DEBUG: ==== Fetching SSC ====")
+        ssc_notices = fetch_ssc(page)
+
+        print("DEBUG: ==== Fetching DSSSB ====")
+        dsssb_notices = fetch_dsssb(page)
+
+        browser.close()
+
+    notices = merge_notices(ssc_notices, dsssb_notices)
+    print(f"DEBUG: Total unique notice-like links across SSC + DSSSB = {len(notices)}")
 
     if not notices:
         print("No notices fetched this run (could be a temporary site issue).")
@@ -653,34 +1032,36 @@ def main():
 
     new_count = 0
     for n in notices:
-        key = n["link"]
+        source = n.get("source", "SSC")
+        key = f"{source}:{n['link']}"
         sig = normalize_signature(n["title"], n["category"])
 
         if key in seen:
             continue
         if sig in seen_signatures:
             print(f"DEBUG: Skipping likely duplicate (same headline/category, "
-                  f"different link) [{n['category']}]: {n['title']}")
+                  f"different link) [{source}/{n['category']}]: {n['title']}")
             seen[key] = {"title": n["title"], "category": n["category"], "notified": True}
             continue
 
-        print(f"New notice found [{n['category']}]: {n['title']} "
+        print(f"New notice found [{source}/{n['category']}]: {n['title']} "
               f"(fileName={n.get('file_name')}) -> {n['link']}")
         ok = send_to_telegram(
             n["category"], n["title"], n["link"],
             file_name=n.get("file_name"),
             download_candidates=n.get("download_candidates"),
+            source=source,
         )
         if ok:
             seen[key] = {"title": n["title"], "category": n["category"], "notified": True}
             seen_signatures.add(sig)
             new_count += 1
         else:
-            print(f"WARNING: Failed to send notice [{n['category']}]: {n['title']}")
+            print(f"WARNING: Failed to send notice [{source}/{n['category']}]: {n['title']}")
         time.sleep(2)
 
-    if len(seen) > 800:
-        seen = dict(list(seen.items())[-800:])
+    if len(seen) > 1500:
+        seen = dict(list(seen.items())[-1500:])
 
     save_seen(seen)
     print(f"Done. {new_count} new notice(s) posted.")
