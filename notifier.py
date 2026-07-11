@@ -517,6 +517,12 @@ DSSSB_PAGES = {
 
 MAX_AUTO_DISCOVERED_PAGES = 5  # unbounded growth se bachne ke liye cap
 
+# Poori DSSSB phase (saare pages + fallback attempts milaake) is se zyada
+# time kabhi nahi legi -- runtime ko bound karne ka asli fix. Agar budget
+# khatam ho jaaye beech me, baaki pages skip ho jaate hain aur agle run
+# (kuch minute baad) me automatically retry ho jaate hain.
+DSSSB_TIME_BUDGET_SECONDS = 90
+
 # DSSSB rows show "Date: dd-mm-yyyy" as ONE combined line, plus a
 # Filter/Reset search widget and a "(Ex: 2025)" placeholder hint.
 DSSSB_SKIP_LINE_PATTERNS = SKIP_LINE_PATTERNS + [
@@ -666,30 +672,43 @@ def extract_dsssb_records(page, category):
 def extract_dsssb_records_via_reader(url, category):
     """FALLBACK for when direct browser navigation to DSSSB fails.
 
-    Confirmed root cause: DSSSB's server appears to block connections from
-    GitHub Actions' datacenter IP ranges (net::ERR_CONNECTION_TIMED_OUT) --
-    a common practice on Indian government sites -- even though the site
-    is fully reachable from normal/residential networks. No amount of
-    Playwright timeout/wait-strategy tuning fixes a blocked TCP connection.
+    Confirmed root cause: DSSSB's server blocks connections from GitHub
+    Actions' datacenter IP ranges. Jina Reader's DEFAULT engine also
+    failed here ("proxy handshake error" / HTTP 422) -- its default proxy
+    pool's IPs appear to be in a similarly blocked range. Forcing
+    `X-Engine: browser` makes Jina fetch the page with a real headless
+    browser from a different part of its infrastructure, which has a
+    meaningfully different chance of getting through. We try that first
+    (best quality), then fall back to the default engine.
 
-    Workaround: fetch the page through the free Jina Reader proxy
-    (https://r.jina.ai/<url>), which renders the page server-side on
-    Jina's own infrastructure (a different IP range, not blocked) and
-    returns clean Markdown. Jina Reader converts HTML to Markdown via
-    Readability + Turndown, so every document link comes back in standard
-    "[link text](https://...)" syntax -- we parse that directly with
-    plain `requests`, no browser needed for this path at all.
+    Both attempts are given SHORT timeouts -- this function is called
+    inside fetch_dsssb()'s overall time budget, so it must fail fast
+    rather than hang.
     """
     found = []
-    try:
-        resp = SESSION.get(f"https://r.jina.ai/{url}", timeout=30)
-        if resp.status_code != 200 or not resp.text:
-            print(f"DEBUG: [DSSSB/{category}] Reader-proxy fallback failed: "
-                  f"HTTP {resp.status_code}")
-            return found
-        text = resp.text
-    except Exception as e:
-        print(f"DEBUG: [DSSSB/{category}] Reader-proxy fallback error: {e}")
+    text = None
+
+    attempts = [
+        {"X-Engine": "browser", "X-Timeout": "10"},
+        {"X-Engine": "direct", "X-Timeout": "8"},
+    ]
+
+    for headers in attempts:
+        engine = headers.get("X-Engine")
+        try:
+            resp = SESSION.get(f"https://r.jina.ai/{url}", headers=headers, timeout=15)
+            if resp.status_code == 200 and resp.text and len(resp.text) > 200:
+                text = resp.text
+                print(f"DEBUG: [DSSSB/{category}] Reader-proxy succeeded (engine={engine}).")
+                break
+            print(f"DEBUG: [DSSSB/{category}] Reader-proxy (engine={engine}) failed: "
+                  f"HTTP {resp.status_code} — {resp.text[:150]!r}")
+        except Exception as e:
+            print(f"DEBUG: [DSSSB/{category}] Reader-proxy (engine={engine}) error: {e}")
+
+    if not text:
+        print(f"DEBUG: [DSSSB/{category}] All reader-proxy attempts failed — "
+              f"this page will be retried on the next run.")
         return found
 
     link_pattern = re.compile(r"\[([^\]]*)\]\((https?://[^\s\)]+)\)")
@@ -762,12 +781,11 @@ def fetch_dsssb_page(page, category, url):
     page.on("response", handle_response)
     page_loaded = True
     try:
-        # Timeout chhota rakha (12s, pehle 25s tha) -- GitHub Actions se
-        # DSSSB block hone ki wajah se ye almost hamesha fail hoga, isliye
-        # jaldi fail karke reader-proxy fallback pe switch karna behtar
-        # hai, poora 25s waste karne se.
-        page.goto(url, wait_until="domcontentloaded", timeout=12000)
-        page.wait_for_timeout(1000)
+        # 8s hi diya (pehle 12s, uससे pehle 25s) -- GitHub Actions se DSSSB
+        # consistently block ho raha hai, isliye jaldi fail karke
+        # reader-proxy fallback pe jaana behtar hai, time waste karne se.
+        page.goto(url, wait_until="domcontentloaded", timeout=8000)
+        page.wait_for_timeout(800)
     except Exception as e:
         print(f"WARNING: [DSSSB/{category}] Direct browser load failed ({e}). "
               f"Falling back to Jina Reader proxy...")
@@ -828,8 +846,10 @@ def discover_dsssb_pages(page):
     growth if the nav menu is large or noisy."""
     discovered = {}
     try:
-        page.goto(DSSSB_BASE + "/", wait_until="domcontentloaded", timeout=12000)
-        page.wait_for_timeout(600)
+        # Chhota timeout (6s) -- ye bhi consistently block hoke fail hota
+        # hai GitHub Actions se, isliye jaldi fail hone dena behtar hai.
+        page.goto(DSSSB_BASE + "/", wait_until="domcontentloaded", timeout=6000)
+        page.wait_for_timeout(500)
         nav_links = page.query_selector_all(
             "nav a[href], header a[href], .menu a[href], .navbar a[href], .main-menu a[href]"
         )
@@ -865,7 +885,18 @@ def discover_dsssb_pages(page):
 def fetch_dsssb(page):
     """Visits every page in DSSSB_PAGES (plus any auto-discovered ones)
     and collects notices from all of them. Uses the SAME shared browser
-    `page` passed in from main() -- no separate Chromium instance."""
+    `page` passed in from main() -- no separate Chromium instance.
+
+    HARD TIME BUDGET: DSSSB_TIME_BUDGET_SECONDS caps the ENTIRE DSSSB
+    phase, no matter how many pages/fallback-proxy attempts are involved.
+    This is the real fix for "runtime getting too long" -- individual
+    per-request timeouts alone don't bound total runtime when there are
+    7+ pages each potentially needing 2-3 fallback attempts. If the
+    budget runs out partway through, remaining pages are simply skipped
+    for THIS run -- they get checked again on the very next run a few
+    minutes later, since this is continuous polling, not a one-shot job.
+    """
+    start_time = time.monotonic()
     pages_to_check = dict(DSSSB_PAGES)
 
     discovered = discover_dsssb_pages(page)
@@ -876,17 +907,25 @@ def fetch_dsssb(page):
 
     all_notices = []
     for category, url in pages_to_check.items():
+        elapsed = time.monotonic() - start_time
+        if elapsed > DSSSB_TIME_BUDGET_SECONDS:
+            print(f"DEBUG: [DSSSB] Time budget ({DSSSB_TIME_BUDGET_SECONDS}s) reached "
+                  f"after {elapsed:.0f}s -- skipping remaining page(s) this run: "
+                  f"'{category}' onwards. They'll be checked again next run.")
+            break
         print(f"DEBUG: ---- Checking [DSSSB/{category}] -> {url} ----")
         page_notices = fetch_dsssb_page(page, category, url)
         all_notices.extend(page_notices)
-        time.sleep(0.5)
+        time.sleep(0.3)
 
     deduped = {}
     for n in all_notices:
         deduped.setdefault(n["link"], n)
     final = list(deduped.values())
+    total_elapsed = time.monotonic() - start_time
     print(f"DEBUG: [DSSSB] Grand total: {len(all_notices)} raw, "
-          f"{len(final)} unique after link-based de-dup.")
+          f"{len(final)} unique after link-based de-dup. "
+          f"(DSSSB phase took {total_elapsed:.0f}s)")
     return final
 
 
