@@ -670,7 +670,7 @@ def extract_dsssb_records(page, category):
             "link": href,
             "category": category,
             "file_name": href.rsplit("/", 1)[-1],
-            "download_candidates": [href],
+            "download_candidates": _dsssb_download_candidates(href),
             "source": "DSSSB",
         })
 
@@ -733,6 +733,34 @@ def extract_dsssb_records_via_reader(url, category):
     return found
 
 
+def _clean_window_start(text):
+    """The raw window sometimes starts mid-attribute or mid-word (e.g.
+    'lass="file_size"> | 1.58 MB Download...' instead of 'class=...').
+    Trim everything before the first real word (a capital letter followed
+    by 2+ more letters) to drop that garbage prefix."""
+    m = re.search(r"[A-Z][A-Za-z]{2,}", text)
+    if m:
+        return text[m.start():]
+    return text
+
+
+def _dsssb_download_candidates(full_link):
+    """Ordered list of URLs to try when downloading a DSSSB file for
+    Telegram upload. CRITICAL FIX: previously this was just [full_link]
+    -- a direct dsssb.delhi.gov.in URL -- which ALSO times out from
+    GitHub Actions for the exact same reason the page-listing fetch does
+    (NIC's India-only firewall). That caused the file-download step to
+    hang for a full 60s and then fail, even after we'd successfully
+    found the notice via ScraperAPI. Now, when ScraperAPI is configured,
+    its proxied URL goes FIRST so the actual file download also goes
+    through working infrastructure."""
+    if SCRAPER_API_KEY:
+        proxied = ("https://api.scraperapi.com/?api_key=" + SCRAPER_API_KEY +
+                   "&url=" + urllib.parse.quote(full_link, safe=""))
+        return [proxied, full_link]
+    return [full_link]
+
+
 def _extract_dsssb_links_from_html(html, category):
     """Shared HTML-parsing logic for every raw-HTML proxy fallback below.
     Regex-scans for document links, using the HTML text immediately
@@ -749,8 +777,14 @@ def _extract_dsssb_links_from_html(html, category):
         if not full_link:
             continue
 
-        window_start = max(0, m.start() - 600)
+        # Bigger window (900 vs old 600) so the real title start is less
+        # likely to fall outside it, then trim any mid-word/mid-tag
+        # garbage from the front, then drop a leftover "Download "/"View "
+        # action word if the window still starts with one.
+        window_start = max(0, m.start() - 900)
         title = _strip_html_tags(html[window_start:m.start()])
+        title = _clean_window_start(title)
+        title = re.sub(r"^(download|view|preview)\s+", "", title, flags=re.IGNORECASE)
         if len(title) > 160:
             title = title[-160:]
         title = clean_dsssb_title(title)
@@ -760,7 +794,8 @@ def _extract_dsssb_links_from_html(html, category):
         found.append({
             "title": title, "link": full_link, "category": category,
             "file_name": full_link.rsplit("/", 1)[-1],
-            "download_candidates": [full_link], "source": "DSSSB",
+            "download_candidates": _dsssb_download_candidates(full_link),
+            "source": "DSSSB",
         })
     return found
 
@@ -858,7 +893,7 @@ def extract_dsssb_records_via_scraperapi(url, category):
         resp = SESSION.get(
             "https://api.scraperapi.com/",
             params={"api_key": SCRAPER_API_KEY, "url": url},
-            timeout=35,
+            timeout=25,
         )
         if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
             print(f"DEBUG: [DSSSB/{category}] ScraperAPI failed: HTTP {resp.status_code}")
@@ -874,11 +909,23 @@ def extract_dsssb_records_via_scraperapi(url, category):
 
 
 def fetch_dsssb_via_fallback_chain(url, category):
-    """Tries every FREE proxy fallback in order first, stopping at the
-    first that returns anything. ScraperAPI (paid-tier infra, free
-    credits) only runs at the very end, and only if the user opted in
-    with SCRAPER_API_KEY -- by default this entire chain costs ₹0 and
-    needs no signup at all."""
+    """If SCRAPER_API_KEY is set, tries it FIRST (with one retry) --
+    empirically, across multiple runs, the 4 free anonymous proxies have
+    NEVER once succeeded against DSSSB (Jina always 422, allorigins/
+    codetabs always time out, corsproxy always 403 -- consistent, not
+    random), while ScraperAPI does succeed. Trying the free ones first
+    was wasting 50-60+ seconds per page for a guaranteed failure. If no
+    key is configured, falls back to the free chain as before (still
+    free, still worth trying, just unlikely to work)."""
+    if SCRAPER_API_KEY:
+        for attempt in (1, 2):
+            records = extract_dsssb_records_via_scraperapi(url, category)
+            if records:
+                return records
+            if attempt == 1:
+                print(f"DEBUG: [DSSSB/{category}] ScraperAPI attempt 1 empty, retrying once...")
+        print(f"DEBUG: [DSSSB/{category}] ScraperAPI failed twice, trying free proxies as last resort...")
+
     for fn in (
         extract_dsssb_records_via_reader,
         extract_dsssb_records_via_allorigins,
@@ -886,11 +933,6 @@ def fetch_dsssb_via_fallback_chain(url, category):
         extract_dsssb_records_via_corsproxy,
     ):
         records = fn(url, category)
-        if records:
-            return records
-
-    if SCRAPER_API_KEY:
-        records = extract_dsssb_records_via_scraperapi(url, category)
         if records:
             return records
 
