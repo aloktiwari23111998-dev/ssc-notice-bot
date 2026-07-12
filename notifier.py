@@ -516,7 +516,7 @@ DSSSB_PAGES = {
 REGIONAL_SSC_SITES = {
     "SSC-NR":  {"url": "https://sscnr.nic.in/",      "base": "https://sscnr.nic.in"},
     "SSC-NWR": {"url": "https://sscnwr.org/",         "base": "https://sscnwr.org"},
-    "SSC-CR":  {"url": "https://ssc-cr.org/",         "base": "https://ssc-cr.org"},
+    "SSC-CR":  {"url": "https://ssccr.gov.in/",       "base": "https://ssccr.gov.in"},
     "SSC-ER":  {"url": "https://sscer.org/",          "base": "https://sscer.org"},
     "SSC-NER": {"url": "https://sscner.org.in/",      "base": "https://sscner.org.in"},
     "SSC-WR":  {"url": "https://sscwr.net/",          "base": "https://sscwr.net"},
@@ -529,7 +529,7 @@ REGIONAL_SSC_SITES = {
 # time kabhi nahi legi. Regional phase gets its own separate budget so
 # the two don't compete for time within the same run.
 DSSSB_TIME_BUDGET_SECONDS = 150
-REGIONAL_TIME_BUDGET_SECONDS = 150
+REGIONAL_TIME_BUDGET_SECONDS = 450
 
 # Agar SCRAPER_API_KEY set hai, to har run DSSSB/regional check karne se
 # free monthly credits (1000/month) jaldi khatam ho sakte hain agar cron
@@ -613,6 +613,22 @@ def _proxy_download_candidates(full_link):
     return [full_link]
 
 
+def _looks_like_document_href(href_lower):
+    """Broader check than a plain file-extension test. Some govt sites
+    (e.g. SSC-SR) serve real PDFs through a dynamic query-string endpoint
+    like 'indexes/pdf_view?file=...&token=...' instead of a link that
+    ends in '.pdf' -- this catches those too."""
+    if href_lower.endswith(FILE_EXTENSIONS):
+        return True
+    if "attachment" in href_lower:
+        return True
+    if "pdf_view" in href_lower or "file_view" in href_lower or "doc_view" in href_lower:
+        return True
+    if re.search(r"[?&](file|filename|doc|document)=", href_lower):
+        return True
+    return False
+
+
 def _extract_generic_links_from_html(html, category, base_domain=DSSSB_BASE, source_label="DSSSB"):
     """Shared HTML-parsing logic for every raw-HTML proxy fallback below.
     Works for DSSSB and for any SSC regional site: regex-scans for
@@ -620,10 +636,12 @@ def _extract_generic_links_from_html(html, category, base_domain=DSSSB_BASE, sou
     the title source (same idea as DOM-climbing, done on raw markup)."""
     found = []
     anchor_pattern = re.compile(r'<a\b[^>]*href=["\']([^"\']+)["\']', re.IGNORECASE)
+    total_anchors = 0
     for m in anchor_pattern.finditer(html):
+        total_anchors += 1
         href = m.group(1)
         href_lower = href.lower()
-        if not (href_lower.endswith(FILE_EXTENSIONS) or "attachment" in href_lower):
+        if not _looks_like_document_href(href_lower):
             continue
         full_link = absolutize(href, base_domain=base_domain)
         if not full_link:
@@ -649,6 +667,22 @@ def _extract_generic_links_from_html(html, category, base_domain=DSSSB_BASE, sou
             "download_candidates": _proxy_download_candidates(full_link),
             "source": source_label,
         })
+
+    if not found:
+        # Diagnostic only -- helps tell apart "page had zero <a> tags at
+        # all" (blocked/empty/error page slipped past the length check)
+        # from "page had plenty of links, none matched our document
+        # pattern" (this site's real download links use a URL shape we
+        # haven't seen yet -- check a few sample hrefs below to add a
+        # new pattern to _looks_like_document_href).
+        sample_hrefs = []
+        for m in re.finditer(r'<a\b[^>]*href=["\']([^"\']+)["\']', html, re.IGNORECASE):
+            sample_hrefs.append(m.group(1))
+            if len(sample_hrefs) >= 8:
+                break
+        print(f"DEBUG: [{source_label}/{category}] 0 document links matched out of "
+              f"{total_anchors} total <a> tag(s) on page. Sample hrefs seen: {sample_hrefs}")
+
     return found
 
 
