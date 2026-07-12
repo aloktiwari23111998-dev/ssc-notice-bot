@@ -9,7 +9,14 @@ on:
   workflow_dispatch: {}   # allows manual "Run workflow" button + cron-job.org trigger
 
 # Zaroori: ek time pe sirf ek run chale, warna concurrent runs
-# seen_notices.json push karte waqt conflict kar sakte hain
+# seen_notices.json push karte waqt conflict kar sakte hain.
+#
+# cancel-in-progress: false rakha hai (pehle true tha) -- ab SSC + DSSSB
+# dono check hote hain (12 pages total), isliye ek run thoda zyada time
+# le sakta hai. false rakhne se agar cron-job.org beech me dobara trigger
+# kare, to naya run purane ko cancel nahi karega -- balki queue me wait
+# karega jab tak pehla run poora na ho jaaye. Isse koi bhi check cycle
+# aadha-adhoora cancel hoke waste nahi hota.
 concurrency:
   group: ssc-notice-check
   cancel-in-progress: false
@@ -24,6 +31,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -46,13 +55,50 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
-          DSSSB_CHECK_EVERY_N_RUNS: ${{ secrets.DSSSB_CHECK_EVERY_N_RUNS }}
-        run: python notifier.py
+          # Isके bina Python apna print() output buffer kar leta hai jab
+          # ek real terminal na ho (jaisa CI runners me hota hai) -- isi
+          # wajah se logs "1-2 min stuck" dikhte the, phir ek saath burst
+          # me aate the. Script asal me kaam kar raha hota tha, bas logs
+          # delay se dikh rahe the. Ye fix se ab turant, live dikhega.
+          PYTHONUNBUFFERED: "1"
+        run: python -u notifier.py
 
       - name: Commit updated state file
         run: |
           git config user.name "ssc-notice-bot"
           git config user.email "actions@github.com"
           git add seen_notices.json
-          git diff --quiet && git diff --staged --quiet || git commit -m "Update seen notices [skip ci]"
-          git push
+
+          if git diff --staged --quiet; then
+            echo "No changes to seen_notices.json -- nothing to commit."
+            exit 0
+          fi
+
+          git commit -m "Update seen notices [skip ci]"
+
+          # ZAROORI FIX: agar cron bahut frequent trigger karta hai, do
+          # runs ke beech "git push" fail ho sakta hai kyunki remote pe
+          # dusre run ka commit already aa chuka hota hai (non-fast-
+          # forward error). Pehle wala plain "git push" is case me chup-
+          # chaap fail ho jaata tha -- jisse updated seen_notices.json
+          # kabhi save hi nahi hota tha, aur agli run purani (stale)
+          # state se shuru hoke SAME notices ko dobara "naya" samajh
+          # leti thi (isi wajah se DSSSB me duplicate aa rahe the).
+          #
+          # Fix: push se pehle "pull --rebase" karke latest remote state
+          # le lo, apna commit uske upar rebase kar do, phir push karo.
+          # 5 baar tak retry karo (thodi si delay ke saath) taaki
+          # back-to-back runs bhi successfully apni state save kar sakein.
+          for i in 1 2 3 4 5; do
+            if git pull --rebase origin main && git push; then
+              echo "Push succeeded on attempt $i."
+              exit 0
+            fi
+            echo "Push attempt $i failed (likely a race with another run) -- retrying..."
+            sleep $((RANDOM % 5 + 2))
+          done
+
+          echo "ERROR: Could not push updated seen_notices.json after 5 attempts."
+          echo "Notices sent to Telegram this run are safe, but state wasn't saved --"
+          echo "next run may re-detect some of the same notices as 'new'."
+          exit 1
