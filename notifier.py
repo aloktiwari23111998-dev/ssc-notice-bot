@@ -1,68 +1,61 @@
 """
-SSC (ssc.gov.in) + DSSSB (dsssb.delhi.gov.in) -> Telegram Auto-Poster
-====================================================
+SSC (ssc.gov.in) + 9 SSC Regional Offices + DSSSB (dsssb.delhi.gov.in)
+-> Telegram Auto-Poster
+=======================================================================
 
-SSC SECTION IS PRODUCTION CODE -- behavior 100% unchanged from the version
-supplied. Kya karta hai:
-1. SSC ke saare important public pages check karta hai (Notice Board, Results,
-   Answer Key, Admit Card, Home) — sirf ek page nahi, poori site.
-2. Har page ko headless browser (Playwright) se open karta hai, kyunki SSC ka
-   naya portal Angular/JS pe bana hai (plain requests kaam nahi karta).
-3. SSC ka Angular app apna data XHR/fetch calls se JSON ke roop me laata hai.
-   Ye script har page load ke dauraan saari network responses "sunta" hai,
-   unme se JSON body nikaalta hai.
-4. SCHEMA-BASED PARSING: SSC ke actual API records ka real shape ye hai:
-       { "headline": "...", "attachments": [
-             {"fileName": "...", "path": "...", "type": "...", "documentType": "..."},
-             ...
-       ] }
-   `headline` hamesha Telegram title banta hai. Har `attachments[]` entry se
-   ek alag notice banti hai.
-5. `attachments[].path` khud ek public download URL NAHI hai -- confirmed
-   real pattern `https://ssc.gov.in/api/attachment/<path>` hai, jise
-   primary candidate banaya gaya hai, aur ek chhoti fallback candidate list
-   bhi try hoti hai.
-6. Telegram pe upload karne se PEHLE file ko khud download karke validate
-   kiya jaata hai (status 200, Content-Type, "%PDF" magic bytes).
-7. Result/Answer Key jaise pages pe <select> dropdown se exam choose karna
-   padta hai -- script automatically har option try karta hai.
-8. DOM-based generic <a href> scanning ek SAFETY NET ke roop me rakha hai.
-9. seen_notices.json se compare, jo bhi NAYA milta hai Telegram pe jaata hai.
+SSC MAIN SECTION -- PRODUCTION CODE, behavior 100% unchanged from before.
+(Schema-based headline+attachments[] JSON API extraction via Playwright,
+DOM-scan safety net, dropdown-triggering for Result/Answer Key pages.)
 
-DSSSB SECTION (independent module):
-DSSSB ek server-rendered (Drupal) site hai. Iske liye:
-  - Generic JSON/XHR auto-detect (non-schema-locked -- future-proofing ke
-    liye, abhi tak koi API observed nahi hui, isliye zyaadatar DOM scan
-    hi chalega).
-  - DOM-row extraction primary/reliable path hai.
-  - Home-page nav-menu se naye sections auto-discover karne ki koshish
-    (best-effort, non-fatal -- confirmed pages hamesha check hote hain
-    chahe discovery fail ho jaaye).
-  - `domcontentloaded` wait strategy (NOT `networkidle`) -- DSSSB pe
-    background analytics/tracker requests hamesha chalte rehte hain jisse
-    "networkidle" state kabhi aata hi nahi aur page.goto() 60s timeout
-    tak hang ho jaata tha. domcontentloaded turant fire hota hai jaise hi
-    HTML mil jaaye, isliye fast aur reliable hai.
-  - Agar page load hi fail ho jaaye, DOM scan bilkul skip ho jaata hai
-    (pehle wala bug: goto fail hone ke baad bhi query_selector_all() call
-    ho raha tha, jisse "Execution context was destroyed" wali cascading
-    error aati thi).
+DSSSB SECTION -- unchanged from before. Pure HTTP-request proxy-chain
+fetch (Jina reader / allorigins / codetabs / corsproxy / optional
+ScraperAPI), since DSSSB's NIC-hosted site blocks direct requests from
+GitHub Actions' datacenter IPs.
 
-PERFORMANCE (cron ko jitna jaldi ho sake dobara chalne dene ke liye):
-  - EK HI Chromium browser instance -- SSC aur DSSSB dono isi ko reuse
-    karte hain (naya launch nahi hota beech me).
-  - EK HI requests.Session() -- saare downloads aur Telegram API calls
-    connection pooling ke saath jaate hain.
-  - DSSSB ke timeouts chhote aur bounded hain (25s/page max, domcontentloaded)
-    taaki agar DSSSB down bhi ho, poora run 1-2 minute se zyada na atke.
-  - Auto-discovery sirf DSSSB home page pe ek chhota (20s) check hai, aur
-    max 5 extra pages hi add karta hai -- unbounded growth se bachne ke
-    liye.
+SSC REGIONAL OFFICES SECTION (NEW):
+SSC has 9 separate regional office websites, each on its own domain, each
+independently run (some .nic.in, some .org, some .gov.in):
+    NR   - https://sscnr.nic.in/          (Delhi, Rajasthan, Uttarakhand)
+    NWR  - https://sscnwr.org/            (Chandigarh, Haryana, HP, J&K, Punjab)
+    CR   - https://ssc-cr.org/            (UP, Bihar)
+    ER   - https://sscer.org/             (West Bengal, Odisha, Jharkhand, etc.)
+    NER  - https://sscner.org.in/         (Assam, Arunachal, Manipur, etc.)
+    WR   - https://sscwr.net/             (Maharashtra, Gujarat, Goa)
+    MPR  - https://sscmpr.org/            (Madhya Pradesh, Chhattisgarh)
+    SR   - https://sscsr.gov.in/          (Andhra Pradesh, TN, Telangana, Puducherry)
+    KKR  - https://ssckkr.kar.nic.in/     (Karnataka, Kerala, Lakshadweep)
 
-GitHub Actions cron-job.org se trigger hota hai (workflow_dispatch), 
-concurrency queueing ("cancel-in-progress: false") ke saath, taaki koi
-bhi trigger cycle beech me cancel na ho aur agla run turant queue se
-shuru ho jaaye jaise hi purana khatam ho.
+These are government sites on varied, unverified-live HTML layouts (this
+script's regional URLs/regions were confirmed via search, not a live
+browser session), so -- same reasoning as DSSSB -- each region's HOMEPAGE
+is fetched through the same proxy-fallback chain (Jina/allorigins/
+codetabs/corsproxy, or ScraperAPI if configured) rather than direct
+Playwright navigation, since .nic.in/.gov.in regional sites are just as
+likely to block GitHub Actions' datacenter IPs as DSSSB was. Only the
+homepage of each region is monitored for now, since regional sites
+typically show their latest notices/results directly on the homepage. If
+DEBUG logs show a region isn't picking up real notices, that region's
+homepage structure differs from what was assumed -- check the logs and
+adjust, or add that region's actual notice-board sub-page URL once known.
+
+FIRST-RUN BASELINE SEEDING (NEW, applies to every source):
+Adding 9 brand-new regional sites means, on their very first run, this
+script would otherwise find EVERY notice already sitting on each site and
+blast all of them to Telegram at once -- since none of them exist yet in
+seen_notices.json. To prevent that: the very first time a given SOURCE
+(e.g. "SSC-NR", "SSC-KKR") is seen, every notice found for it this run is
+silently recorded into seen_notices.json as already-seen -- nothing is
+sent to Telegram. That source is then marked "seeded" (seen_notices.json
+key "_seeded_sources"). From the NEXT run onwards, only genuinely NEW
+notices for that source (published after this baseline) are sent, same
+as SSC main and DSSSB already do today (which are auto-marked "seeded" on
+upgrade, since they already have real history in seen_notices.json --
+their existing behavior is 100% unaffected).
+
+Everything else (single shared requests.Session, single shared Chromium
+instance for SSC-main, time budgets so a slow/blocked site can't hang the
+whole run, GitHub Actions cron via cron-job.org workflow_dispatch) is
+unchanged from the working version.
 """
 
 import json
@@ -117,8 +110,8 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
-# Ek hi requests Session -- SSC downloads, DSSSB downloads, aur Telegram
-# API calls sab isi se jaate hain (connection pooling / thoda fast).
+# Ek hi requests Session -- SSC downloads, DSSSB/regional downloads, aur
+# Telegram API calls sab isi se jaate hain (connection pooling / thoda fast).
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": USER_AGENT})
 
@@ -148,7 +141,8 @@ def absolutize(link, base_domain="https://ssc.gov.in"):
 
     `base_domain` defaults to SSC's domain so every EXISTING SSC call site
     (which calls absolutize(href) with just one argument) behaves 100%
-    identically to before. DSSSB's code passes base_domain=DSSSB_BASE."""
+    identically to before. DSSSB and each regional site pass their own
+    base_domain explicitly."""
     if not link:
         return None
     link = link.strip()
@@ -449,15 +443,11 @@ def fetch_notices_from_page(page, category, url):
 def fetch_all_notices(shared_page=None):
     """Visits every page in PAGES_TO_MONITOR and collects notices.
 
-    `shared_page` -- NEW, OPTIONAL. If None (default), behaves EXACTLY as
-    before: opens its own Chromium browser, uses it, closes it. This is
-    the standalone/original behavior, byte-for-byte unchanged.
-
-    If a Playwright `page` object is passed in (from main(), sharing ONE
-    browser across SSC + DSSSB), this function uses that page directly and
-    does NOT open or close any browser itself -- the caller owns that
-    lifecycle. This is the only way single-browser-instance sharing works
-    without editing a single line of the actual SSC scraping logic above.
+    `shared_page` -- OPTIONAL. If None (default), opens its own Chromium
+    browser, uses it, closes it (standalone behavior, unchanged). If a
+    Playwright `page` object is passed in (from main(), sharing ONE
+    browser across the whole run), this function uses that page directly
+    and does NOT open or close any browser itself.
     """
     def _run(page):
         all_notices = []
@@ -494,7 +484,8 @@ def fetch_ssc(page=None):
 
 
 # ================================================================
-# DSSSB (dsssb.delhi.gov.in) — INDEPENDENT MODULE
+# DSSSB (dsssb.delhi.gov.in) + SSC REGIONAL OFFICES
+# — shared HTTP-proxy-chain module (no browser needed)
 # ================================================================
 
 DSSSB_BASE = "https://dsssb.delhi.gov.in"
@@ -515,22 +506,40 @@ DSSSB_PAGES = {
     "Home": f"{DSSSB_BASE}/",
 }
 
-# Poori DSSSB phase (saare pages + fallback attempts milaake) is se zyada
-# time kabhi nahi legi -- runtime ko bound karne ka asli fix. Agar budget
-# khatam ho jaaye beech me, baaki pages skip ho jaate hain aur agle run
-# (kuch minute baad) me automatically retry ho jaate hain.
-DSSSB_TIME_BUDGET_SECONDS = 150
+# NEW: SSC's 9 regional office sites. Each is a separate domain/site run
+# independently of ssc.gov.in. URLs confirmed via search (not a live
+# browser check), so only the homepage of each is monitored for now --
+# regional sites typically list their latest notices/results right on
+# the homepage. Category is always "Home" per region; add a dedicated
+# sub-page URL here later if a region turns out to have one worth
+# tracking separately.
+REGIONAL_SSC_SITES = {
+    "SSC-NR":  {"url": "https://sscnr.nic.in/",      "base": "https://sscnr.nic.in"},
+    "SSC-NWR": {"url": "https://sscnwr.org/",         "base": "https://sscnwr.org"},
+    "SSC-CR":  {"url": "https://ssc-cr.org/",         "base": "https://ssc-cr.org"},
+    "SSC-ER":  {"url": "https://sscer.org/",          "base": "https://sscer.org"},
+    "SSC-NER": {"url": "https://sscner.org.in/",      "base": "https://sscner.org.in"},
+    "SSC-WR":  {"url": "https://sscwr.net/",          "base": "https://sscwr.net"},
+    "SSC-MPR": {"url": "https://sscmpr.org/",         "base": "https://sscmpr.org"},
+    "SSC-SR":  {"url": "https://sscsr.gov.in/",       "base": "https://sscsr.gov.in"},
+    "SSC-KKR": {"url": "https://ssckkr.kar.nic.in/",  "base": "https://ssckkr.kar.nic.in"},
+}
 
-# Agar SCRAPER_API_KEY set hai, to har run DSSSB check karne se free
-# monthly credits (1000/month) jaldi khatam ho sakte hain agar cron bahut
-# frequent hai. Isse env var se control kar sakte ho -- e.g. "6" matlab
-# DSSSB sirf har 6th run me check hoga (baaki runs me sirf SSC chalega,
-# jo bilkul free/unlimited hai). Default "1" = har run me check (jaisa
-# pehle tha, bilkul backward-compatible).
+# Poori DSSSB phase (saare pages + fallback attempts milaake) is se zyada
+# time kabhi nahi legi. Regional phase gets its own separate budget so
+# the two don't compete for time within the same run.
+DSSSB_TIME_BUDGET_SECONDS = 150
+REGIONAL_TIME_BUDGET_SECONDS = 150
+
+# Agar SCRAPER_API_KEY set hai, to har run DSSSB/regional check karne se
+# free monthly credits (1000/month) jaldi khatam ho sakte hain agar cron
+# bahut frequent hai. In env vars se control kar sakte ho.
 DSSSB_CHECK_EVERY_N_RUNS = max(1, int(os.environ.get("DSSSB_CHECK_EVERY_N_RUNS", "1")))
+REGIONAL_CHECK_EVERY_N_RUNS = max(1, int(os.environ.get("REGIONAL_CHECK_EVERY_N_RUNS", "1")))
 
 # DSSSB rows show "Date: dd-mm-yyyy" as ONE combined line, plus a
-# Filter/Reset search widget and a "(Ex: 2025)" placeholder hint.
+# Filter/Reset search widget and a "(Ex: 2025)" placeholder hint. Reused
+# as a general-purpose extra-noise filter for regional sites too.
 DSSSB_SKIP_LINE_PATTERNS = SKIP_LINE_PATTERNS + [
     r"^date\s*:.*$",
     r"^filter$",
@@ -570,43 +579,95 @@ TRAILING_DATE_SIZE_PATTERN = re.compile(
 def _extract_title_from_window(text):
     """The raw window often contains the TAIL of the previous row (its
     own Date/Size/'Download' text) before the current row's real title
-    begins -- a fixed character-count window can't tell rows apart. Fix:
-    find the LAST 'Download'/'View'/'Preview' word in the window (that's
-    the previous row's action link, marking exactly where it ends) and
-    keep only what comes after it -- that's the current row's actual
-    title start."""
+    begins. Fix: find the LAST 'Download'/'View'/'Preview' word in the
+    window (that's the previous row's action link) and keep only what
+    comes after it -- that's the current row's actual title start."""
     matches = list(re.finditer(r"\b(download|view|preview)\b", text, re.IGNORECASE))
     if matches:
         text = text[matches[-1].end():]
     text = text.strip()
-    # The current row's own trailing "Date: dd-mm-yyyy | X.XX MB" (which
-    # sits between the title and its own action link) also needs to go.
     text = TRAILING_DATE_SIZE_PATTERN.sub("", text)
     return text.strip()
 
 
-def extract_dsssb_records_via_reader(url, category):
+def _clean_window_start(text):
+    """The raw window sometimes starts mid-attribute or mid-word. Trim
+    everything before the first real word (a capital letter followed by
+    2+ more letters) to drop that garbage prefix."""
+    m = re.search(r"[A-Z][A-Za-z]{2,}", text)
+    if m:
+        return text[m.start():]
+    return text
+
+
+def _proxy_download_candidates(full_link):
+    """Ordered list of URLs to try when downloading a file (DSSSB or
+    regional) for Telegram upload. When ScraperAPI is configured, its
+    proxied URL goes FIRST, since a direct .nic.in/.gov.in URL download
+    is just as likely to be blocked from GitHub Actions as the page
+    listing fetch itself was."""
+    if SCRAPER_API_KEY:
+        proxied = ("https://api.scraperapi.com/?api_key=" + SCRAPER_API_KEY +
+                   "&url=" + urllib.parse.quote(full_link, safe=""))
+        return [proxied, full_link]
+    return [full_link]
+
+
+def _extract_generic_links_from_html(html, category, base_domain=DSSSB_BASE, source_label="DSSSB"):
+    """Shared HTML-parsing logic for every raw-HTML proxy fallback below.
+    Works for DSSSB and for any SSC regional site: regex-scans for
+    document links, using the HTML text immediately BEFORE each link as
+    the title source (same idea as DOM-climbing, done on raw markup)."""
+    found = []
+    anchor_pattern = re.compile(r'<a\b[^>]*href=["\']([^"\']+)["\']', re.IGNORECASE)
+    for m in anchor_pattern.finditer(html):
+        href = m.group(1)
+        href_lower = href.lower()
+        if not (href_lower.endswith(FILE_EXTENSIONS) or "attachment" in href_lower):
+            continue
+        full_link = absolutize(href, base_domain=base_domain)
+        if not full_link:
+            continue
+
+        # Bigger window (1200 chars) so it reliably contains the previous
+        # row's own "Download"/"View" marker, which _extract_title_from_window
+        # uses as the real split point.
+        window_start = max(0, m.start() - 1200)
+        raw_window = _strip_html_tags(html[window_start:m.start()])
+        title = _extract_title_from_window(raw_window)
+        title = _clean_window_start(title)
+        title = re.sub(r"^(download|view|preview)\s+", "", title, flags=re.IGNORECASE)
+        if len(title) > 200:
+            title = title[-200:]
+        title = clean_dsssb_title(title)
+        if len(title) < 8:
+            continue
+
+        found.append({
+            "title": title, "link": full_link, "category": category,
+            "file_name": full_link.rsplit("/", 1)[-1],
+            "download_candidates": _proxy_download_candidates(full_link),
+            "source": source_label,
+        })
+    return found
+
+
+def extract_records_via_reader(url, category, base_domain=DSSSB_BASE, source_label="DSSSB"):
     """FALLBACK #1: Jina Reader proxy (https://r.jina.ai/). Fetches the
     page server-side on Jina's infrastructure and converts it to Markdown.
-
-    `X-Wait-For-Selector: a` tells Jina to return as soon as ANY anchor
-    tag appears in the DOM, instead of waiting for full network-idle --
-    this is a much lighter condition and resolves faster when the page
-    IS reachable at all. Single attempt only (previous 2-attempt browser+
-    direct combo consistently both failed and wasted ~2x the time for no
-    benefit — Jina's own infra appears unable to reach DSSSB reliably
-    either, so more attempts here don't help, they just cost time)."""
+    Single attempt only -- Jina's own infra appears unable to reach these
+    India-govt sites reliably either, so retries here don't help."""
     found = []
     headers = {"X-Engine": "direct", "X-Wait-For-Selector": "a", "X-Timeout": "8"}
     try:
         resp = SESSION.get(f"https://r.jina.ai/{url}", headers=headers, timeout=12)
         if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
-            print(f"DEBUG: [DSSSB/{category}] Jina reader failed: "
+            print(f"DEBUG: [{source_label}/{category}] Jina reader failed: "
                   f"HTTP {resp.status_code} — {resp.text[:150]!r}")
             return found
         text = resp.text
     except Exception as e:
-        print(f"DEBUG: [DSSSB/{category}] Jina reader error: {e}")
+        print(f"DEBUG: [{source_label}/{category}] Jina reader error: {e}")
         return found
 
     link_pattern = re.compile(r"\[([^\]]*)\]\((https?://[^\s\)]+)\)")
@@ -624,169 +685,83 @@ def extract_dsssb_records_via_reader(url, category):
             found.append({
                 "title": title, "link": link_url, "category": category,
                 "file_name": link_url.rsplit("/", 1)[-1],
-                "download_candidates": [link_url], "source": "DSSSB",
+                "download_candidates": _proxy_download_candidates(link_url),
+                "source": source_label,
             })
 
-    print(f"DEBUG: [DSSSB/{category}] Jina reader found {len(found)} document link(s).")
+    print(f"DEBUG: [{source_label}/{category}] Jina reader found {len(found)} document link(s).")
     return found
 
 
-def _clean_window_start(text):
-    """The raw window sometimes starts mid-attribute or mid-word (e.g.
-    'lass="file_size"> | 1.58 MB Download...' instead of 'class=...').
-    Trim everything before the first real word (a capital letter followed
-    by 2+ more letters) to drop that garbage prefix."""
-    m = re.search(r"[A-Z][A-Za-z]{2,}", text)
-    if m:
-        return text[m.start():]
-    return text
-
-
-def _dsssb_download_candidates(full_link):
-    """Ordered list of URLs to try when downloading a DSSSB file for
-    Telegram upload. CRITICAL FIX: previously this was just [full_link]
-    -- a direct dsssb.delhi.gov.in URL -- which ALSO times out from
-    GitHub Actions for the exact same reason the page-listing fetch does
-    (NIC's India-only firewall). That caused the file-download step to
-    hang for a full 60s and then fail, even after we'd successfully
-    found the notice via ScraperAPI. Now, when ScraperAPI is configured,
-    its proxied URL goes FIRST so the actual file download also goes
-    through working infrastructure."""
-    if SCRAPER_API_KEY:
-        proxied = ("https://api.scraperapi.com/?api_key=" + SCRAPER_API_KEY +
-                   "&url=" + urllib.parse.quote(full_link, safe=""))
-        return [proxied, full_link]
-    return [full_link]
-
-
-def _extract_dsssb_links_from_html(html, category):
-    """Shared HTML-parsing logic for every raw-HTML proxy fallback below.
-    Regex-scans for document links, using the HTML text immediately
-    BEFORE each link as the title source (same idea as DOM-climbing, done
-    on raw markup instead of a live page)."""
-    found = []
-    anchor_pattern = re.compile(r'<a\b[^>]*href=["\']([^"\']+)["\']', re.IGNORECASE)
-    for m in anchor_pattern.finditer(html):
-        href = m.group(1)
-        href_lower = href.lower()
-        if not (href_lower.endswith(FILE_EXTENSIONS) or "attachment" in href_lower):
-            continue
-        full_link = absolutize(href, base_domain=DSSSB_BASE)
-        if not full_link:
-            continue
-
-        # Bigger window (900 vs old 600) so the real title start is less
-        # likely to fall outside it, then trim any mid-word/mid-tag
-        # garbage from the front, then drop a leftover "Download "/"View "
-        # action word if the window still starts with one.
-        # Bigger window (1200 chars) so it reliably contains the previous
-        # row's own "Download"/"View" marker, which _extract_title_from_window
-        # uses as the real split point (much more reliable than a blind
-        # character-count cut, which sliced mid-word/mid-row before).
-        window_start = max(0, m.start() - 1200)
-        raw_window = _strip_html_tags(html[window_start:m.start()])
-        title = _extract_title_from_window(raw_window)
-        title = _clean_window_start(title)
-        title = re.sub(r"^(download|view|preview)\s+", "", title, flags=re.IGNORECASE)
-        if len(title) > 200:
-            title = title[-200:]
-        title = clean_dsssb_title(title)
-        if len(title) < 8:
-            continue
-
-        found.append({
-            "title": title, "link": full_link, "category": category,
-            "file_name": full_link.rsplit("/", 1)[-1],
-            "download_candidates": _dsssb_download_candidates(full_link),
-            "source": "DSSSB",
-        })
-    return found
-
-
-def extract_dsssb_records_via_allorigins(url, category):
+def extract_records_via_allorigins(url, category, base_domain=DSSSB_BASE, source_label="DSSSB"):
     """FALLBACK #2 (free, no signup): allorigins.win -- plain server-side
     HTTP fetch, different provider/IP range than Jina."""
     try:
         proxied = "https://api.allorigins.win/raw?url=" + urllib.parse.quote(url, safe="")
         resp = SESSION.get(proxied, timeout=12)
         if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
-            print(f"DEBUG: [DSSSB/{category}] allorigins failed: HTTP {resp.status_code}")
+            print(f"DEBUG: [{source_label}/{category}] allorigins failed: HTTP {resp.status_code}")
             return []
         html = resp.text
     except Exception as e:
-        print(f"DEBUG: [DSSSB/{category}] allorigins error: {e}")
+        print(f"DEBUG: [{source_label}/{category}] allorigins error: {e}")
         return []
 
-    found = _extract_dsssb_links_from_html(html, category)
-    print(f"DEBUG: [DSSSB/{category}] allorigins found {len(found)} document link(s).")
+    found = _extract_generic_links_from_html(html, category, base_domain=base_domain, source_label=source_label)
+    print(f"DEBUG: [{source_label}/{category}] allorigins found {len(found)} document link(s).")
     return found
 
 
-def extract_dsssb_records_via_codetabs(url, category):
+def extract_records_via_codetabs(url, category, base_domain=DSSSB_BASE, source_label="DSSSB"):
     """FALLBACK #3 (free, no signup): codetabs.com's public CORS proxy --
     yet another independent provider/IP range."""
     try:
         proxied = "https://api.codetabs.com/v1/proxy?quest=" + urllib.parse.quote(url, safe="")
         resp = SESSION.get(proxied, timeout=12)
         if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
-            print(f"DEBUG: [DSSSB/{category}] codetabs failed: HTTP {resp.status_code}")
+            print(f"DEBUG: [{source_label}/{category}] codetabs failed: HTTP {resp.status_code}")
             return []
         html = resp.text
     except Exception as e:
-        print(f"DEBUG: [DSSSB/{category}] codetabs error: {e}")
+        print(f"DEBUG: [{source_label}/{category}] codetabs error: {e}")
         return []
 
-    found = _extract_dsssb_links_from_html(html, category)
-    print(f"DEBUG: [DSSSB/{category}] codetabs found {len(found)} document link(s).")
+    found = _extract_generic_links_from_html(html, category, base_domain=base_domain, source_label=source_label)
+    print(f"DEBUG: [{source_label}/{category}] codetabs found {len(found)} document link(s).")
     return found
 
 
-def extract_dsssb_records_via_corsproxy(url, category):
+def extract_records_via_corsproxy(url, category, base_domain=DSSSB_BASE, source_label="DSSSB"):
     """FALLBACK #4 (free, no signup): corsproxy.io -- another independent
     free proxy, no API key needed."""
     try:
         proxied = "https://corsproxy.io/?url=" + urllib.parse.quote(url, safe="")
         resp = SESSION.get(proxied, timeout=12)
         if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
-            print(f"DEBUG: [DSSSB/{category}] corsproxy.io failed: HTTP {resp.status_code}")
+            print(f"DEBUG: [{source_label}/{category}] corsproxy.io failed: HTTP {resp.status_code}")
             return []
         html = resp.text
     except Exception as e:
-        print(f"DEBUG: [DSSSB/{category}] corsproxy.io error: {e}")
+        print(f"DEBUG: [{source_label}/{category}] corsproxy.io error: {e}")
         return []
 
-    found = _extract_dsssb_links_from_html(html, category)
-    print(f"DEBUG: [DSSSB/{category}] corsproxy.io found {len(found)} document link(s).")
+    found = _extract_generic_links_from_html(html, category, base_domain=base_domain, source_label=source_label)
+    print(f"DEBUG: [{source_label}/{category}] corsproxy.io found {len(found)} document link(s).")
     return found
 
 
 SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "").strip()
 
 
-def extract_dsssb_records_via_scraperapi(url, category):
-    """FALLBACK #3 -- OPTIONAL, opt-in only (requires SCRAPER_API_KEY).
+def extract_records_via_scraperapi(url, category, base_domain=DSSSB_BASE, source_label="DSSSB"):
+    """FALLBACK -- OPTIONAL, opt-in only (requires SCRAPER_API_KEY).
+    ScraperAPI (and equivalents) offer real rotating proxy pools built for
+    exactly this "govt site blocks datacenter IPs" scenario. Free tier:
+    5,000 one-time + 1,000/month recurring credits.
 
-    Comprehensive research (industry guides, ScrapFly's govt-scraping
-    write-up, ScrapeOps' 2026 Cloudflare-bypass benchmark, several vendor
-    case studies) all converge on the same conclusion for this EXACT
-    scenario -- ".gov site blocks datacenter IPs, free/anonymous proxies
-    also get blocked, only genuine rotating/residential-grade proxy
-    infrastructure gets through reliably." Free anonymous services (Jina,
-    allorigins) sit on well-known, already-blocklisted ranges themselves,
-    which matches exactly what we observed (both failing with different
-    error signatures, consistent with datacenter-IP reputation blocking
-    rather than a simple single-IP ban).
-
-    ScraperAPI (and equivalents like ScrapingBee/Scrape.do/ZenRows) offer
-    real rotating proxy pools with automatic retry specifically built for
-    this. Free tier: 5,000 one-time + 1,000/month recurring credits --
-    enough for meaningful DSSSB coverage without paying, as long as check
-    frequency is kept reasonable (see DSSSB_CHECK_EVERY_N_RUNS below).
-
-    This function does NOTHING unless the user opts in by setting
-    SCRAPER_API_KEY (get a free key at https://www.scraperapi.com/) --
-    the system stays 100% free by default, exactly as before, with this
-    purely as an optional upgrade path.
+    Does NOTHING unless SCRAPER_API_KEY is set (get a free key at
+    https://www.scraperapi.com/) -- the system stays 100% free by
+    default, this is purely an optional upgrade path.
     """
     found = []
     if not SCRAPER_API_KEY:
@@ -799,93 +774,66 @@ def extract_dsssb_records_via_scraperapi(url, category):
             timeout=25,
         )
         if not (resp.status_code == 200 and resp.text and len(resp.text) > 200):
-            print(f"DEBUG: [DSSSB/{category}] ScraperAPI failed: HTTP {resp.status_code}")
+            print(f"DEBUG: [{source_label}/{category}] ScraperAPI failed: HTTP {resp.status_code}")
             return found
         html = resp.text
     except Exception as e:
-        print(f"DEBUG: [DSSSB/{category}] ScraperAPI error: {e}")
+        print(f"DEBUG: [{source_label}/{category}] ScraperAPI error: {e}")
         return found
 
-    found = _extract_dsssb_links_from_html(html, category)
-    print(f"DEBUG: [DSSSB/{category}] ScraperAPI found {len(found)} document link(s).")
+    found = _extract_generic_links_from_html(html, category, base_domain=base_domain, source_label=source_label)
+    print(f"DEBUG: [{source_label}/{category}] ScraperAPI found {len(found)} document link(s).")
     return found
 
 
-def fetch_dsssb_via_fallback_chain(url, category):
+def fetch_via_fallback_chain(url, category, base_domain=DSSSB_BASE, source_label="DSSSB"):
     """If SCRAPER_API_KEY is set, tries it FIRST (up to 3 attempts) --
-    empirically, across multiple runs, the 4 free anonymous proxies have
-    NEVER once succeeded against DSSSB (Jina always 422, allorigins/
-    codetabs always time out, corsproxy always 403 -- consistent, not
-    random), while ScraperAPI does succeed most of the time (though
-    occasionally returns 0 for a page that has real content -- a retry
-    usually fixes this). Trying the free ones first was wasting 50-60+
-    seconds per page for a guaranteed failure. If no key is configured,
-    falls back to the free chain as before (still free, still worth
-    trying, just unlikely to work)."""
+    empirically the free anonymous proxies rarely succeed against these
+    India-govt sites, while ScraperAPI does succeed most of the time. If
+    no key is configured, falls back to the free chain (still worth
+    trying, just less likely to work)."""
     if SCRAPER_API_KEY:
         for attempt in (1, 2, 3):
-            records = extract_dsssb_records_via_scraperapi(url, category)
+            records = extract_records_via_scraperapi(url, category, base_domain=base_domain, source_label=source_label)
             if records:
                 return records
             if attempt < 3:
-                print(f"DEBUG: [DSSSB/{category}] ScraperAPI attempt {attempt} empty, retrying...")
-        print(f"DEBUG: [DSSSB/{category}] ScraperAPI failed 3 times, trying free proxies as last resort...")
+                print(f"DEBUG: [{source_label}/{category}] ScraperAPI attempt {attempt} empty, retrying...")
+        print(f"DEBUG: [{source_label}/{category}] ScraperAPI failed 3 times, trying free proxies as last resort...")
 
     for fn in (
-        extract_dsssb_records_via_reader,
-        extract_dsssb_records_via_allorigins,
-        extract_dsssb_records_via_codetabs,
-        extract_dsssb_records_via_corsproxy,
+        extract_records_via_reader,
+        extract_records_via_allorigins,
+        extract_records_via_codetabs,
+        extract_records_via_corsproxy,
     ):
-        records = fn(url, category)
+        records = fn(url, category, base_domain=base_domain, source_label=source_label)
         if records:
             return records
 
-    print(f"DEBUG: [DSSSB/{category}] All fallback proxies failed — "
+    print(f"DEBUG: [{source_label}/{category}] All fallback proxies failed — "
           f"this page will be retried on the next run.")
     return []
 
 
-def fetch_dsssb_page(category, url):
-    """Fetches one DSSSB page purely via HTTP-request-based proxies -- no
-    browser needed at all (DSSSB is plain server-rendered HTML, unlike
-    SSC's Angular app).
-
-    REMOVED (dead code): direct Playwright navigation, and a JSON-API
-    response listener. Across every real run so far, direct navigation
-    from GitHub Actions has failed 100% of the time (DSSSB's NIC firewall
-    blocks it) and the JSON-API listener has NEVER once found anything
-    (DSSSB genuinely has no such API) -- both were pure wasted time every
-    single run (~8s + listener overhead x 7 pages) for zero benefit.
-    Going straight to the proxy chain is faster and does exactly the same
-    job."""
-    result = fetch_dsssb_via_fallback_chain(url, category)
-    print(f"DEBUG: [DSSSB/{category}] {len(result)} unique notice-like item(s) found.")
+def fetch_generic_page(category, url, base_domain=DSSSB_BASE, source_label="DSSSB"):
+    """Fetches one DSSSB or regional page purely via HTTP-request-based
+    proxies -- no browser needed (these are plain server-rendered HTML,
+    unlike SSC main's Angular app)."""
+    result = fetch_via_fallback_chain(url, category, base_domain=base_domain, source_label=source_label)
+    print(f"DEBUG: [{source_label}/{category}] {len(result)} unique notice-like item(s) found.")
     for i, n in enumerate(result[:10]):
-        print(f"DEBUG [DSSSB/{category}][{i}] title='{n['title'][:80]}' -> {n['link']}")
+        print(f"DEBUG [{source_label}/{category}][{i}] title='{n['title'][:80]}' -> {n['link']}")
     return result
 
 
 def fetch_dsssb():
     """Visits every page in DSSSB_PAGES and collects notices from all of
-    them. Pure HTTP-request based -- no Playwright/browser needed at all
-    (DSSSB is plain server-rendered HTML).
-
-    REMOVED (dead code): auto-discovery of extra nav-menu pages. It tried
-    to load the DSSSB home page via direct Playwright navigation, which
-    -- like every other direct DSSSB request from GitHub Actions -- has
-    failed 100% of the time, every single run, printing nothing but a
-    WARNING and returning empty. It was costing 6+ seconds per run for
-    zero benefit. The 7 confirmed pages in DSSSB_PAGES already cover
-    every real public section; add a new one there directly if DSSSB
-    ever launches a new category.
+    them. Pure HTTP-request based -- no Playwright/browser needed.
 
     HARD TIME BUDGET: DSSSB_TIME_BUDGET_SECONDS caps the ENTIRE DSSSB
-    phase, no matter how many pages/fallback-proxy attempts are involved.
-    If the budget runs out partway through, remaining pages are simply
-    skipped for THIS run -- they get checked again on the very next run
-    a few minutes later, since this is continuous polling, not a
-    one-shot job.
+    phase. If the budget runs out partway through, remaining pages are
+    simply skipped for THIS run -- they get checked again next run.
     """
     start_time = time.monotonic()
 
@@ -898,7 +846,7 @@ def fetch_dsssb():
                   f"'{category}' onwards. They'll be checked again next run.")
             break
         print(f"DEBUG: ---- Checking [DSSSB/{category}] -> {url} ----")
-        page_notices = fetch_dsssb_page(category, url)
+        page_notices = fetch_generic_page(category, url, base_domain=DSSSB_BASE, source_label="DSSSB")
         all_notices.extend(page_notices)
         time.sleep(0.3)
 
@@ -913,15 +861,51 @@ def fetch_dsssb():
     return final
 
 
-def merge_notices(ssc_notices, dsssb_notices):
-    """Combines SSC + DSSSB notices, tagging every item with its source
-    and de-duplicating across both by a composite 'source:link' key."""
-    for n in ssc_notices:
-        n.setdefault("source", "SSC")
-    for n in dsssb_notices:
-        n.setdefault("source", "DSSSB")
+def fetch_regional():
+    """Checks the homepage of each of SSC's 9 regional office websites
+    (NR/NWR/CR/ER/NER/WR/MPR/SR/KKR), through the same proxy-fallback
+    chain used for DSSSB (see module docstring for why: these are
+    separate India-govt-hosted domains, likely to block GitHub Actions'
+    datacenter IPs the same way DSSSB did).
 
-    combined = list(ssc_notices) + list(dsssb_notices)
+    HARD TIME BUDGET: REGIONAL_TIME_BUDGET_SECONDS caps this whole phase;
+    any regions not reached this run get picked up again next run.
+    """
+    start_time = time.monotonic()
+    all_notices = []
+    for source_label, info in REGIONAL_SSC_SITES.items():
+        elapsed = time.monotonic() - start_time
+        if elapsed > REGIONAL_TIME_BUDGET_SECONDS:
+            print(f"DEBUG: [Regional] Time budget ({REGIONAL_TIME_BUDGET_SECONDS}s) reached "
+                  f"after {elapsed:.0f}s -- skipping remaining region(s) this run: "
+                  f"'{source_label}' onwards. They'll be checked again next run.")
+            break
+        print(f"DEBUG: ---- Checking [{source_label}/Home] -> {info['url']} ----")
+        page_notices = fetch_generic_page("Home", info["url"], base_domain=info["base"], source_label=source_label)
+        all_notices.extend(page_notices)
+        time.sleep(0.3)
+
+    deduped = {}
+    for n in all_notices:
+        deduped.setdefault(f"{n['source']}:{n['link']}", n)
+    final = list(deduped.values())
+    total_elapsed = time.monotonic() - start_time
+    print(f"DEBUG: [Regional] Grand total: {len(all_notices)} raw, "
+          f"{len(final)} unique after link-based de-dup. "
+          f"(Regional phase took {total_elapsed:.0f}s)")
+    return final
+
+
+def merge_notices(*notice_lists):
+    """Combines notices from any number of sources, tagging every item
+    with its source (defaulting to 'SSC' if missing, for the main-SSC
+    list which doesn't set one explicitly) and de-duplicating across all
+    of them by a composite 'source:link' key."""
+    combined = []
+    for lst in notice_lists:
+        for n in lst:
+            n.setdefault("source", "SSC")
+            combined.append(n)
 
     deduped = {}
     for n in combined:
@@ -1077,6 +1061,11 @@ def send_to_telegram(category, title, link, file_name=None, download_candidates=
 # MAIN
 # ================================================================
 
+SEEDED_SOURCES_KEY = "_seeded_sources"
+DSSSB_RUN_COUNTER_KEY = "_dsssb_run_counter"
+RESERVED_KEYS = (SEEDED_SOURCES_KEY, DSSSB_RUN_COUNTER_KEY)
+
+
 def main():
     seen = load_seen()
 
@@ -1093,45 +1082,63 @@ def main():
         if isinstance(entry, dict) and "title" in entry and "category" in entry:
             seen_signatures.add(normalize_signature(entry["title"], entry["category"]))
 
-    # ---- Chromium instance -- SSC only now (DSSSB is pure HTTP requests,
-    # no browser needed at all anymore) ----
-    print("DEBUG: ==== Launching Chromium for SSC ====")
+    # ---- Which sources already have real history? Anything with existing
+    # "<source>:<link>" keys in seen_notices.json was already being
+    # tracked before this baseline-seeding feature existed, so it's
+    # auto-marked "seeded" -- its genuinely-new notices keep flowing to
+    # Telegram exactly as before, completely unaffected. ----
+    seeded_entry = seen.get(SEEDED_SOURCES_KEY, {})
+    seeded_sources = set(seeded_entry.get("list", [])) if isinstance(seeded_entry, dict) else set()
+    for existing_key in seen:
+        if existing_key.startswith(RESERVED_KEYS) or existing_key.startswith("_"):
+            continue
+        seeded_sources.add(existing_key.split(":", 1)[0])
+
+    # ---- Chromium instance -- SSC main only (DSSSB/regional are pure
+    # HTTP requests, no browser needed) ----
+    print("DEBUG: ==== Launching Chromium for SSC main ====")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(user_agent=USER_AGENT)
 
-        print("DEBUG: ==== Fetching SSC ====")
+        print("DEBUG: ==== Fetching SSC main ====")
         ssc_notices = fetch_ssc(page)
 
         browser.close()
-    print("DEBUG: ==== Chromium closed (not needed for DSSSB) ====")
+    print("DEBUG: ==== Chromium closed ====")
 
-    # Throttled DSSSB check -- reserved key "_dsssb_run_counter" in
-    # seen_notices.json (never collides with real "SSC:"/"DSSSB:" keys).
-    # Only matters if DSSSB_CHECK_EVERY_N_RUNS > 1 (i.e. the user is
-    # conserving ScraperAPI free credits); default behavior (=1) checks
-    # DSSSB every single run, same as before.
-    counter_entry = seen.get("_dsssb_run_counter", {})
+    # Throttled DSSSB check -- default (=1) checks every run, unchanged.
+    counter_entry = seen.get(DSSSB_RUN_COUNTER_KEY, {})
     run_number = counter_entry.get("count", 0) if isinstance(counter_entry, dict) else 0
-    seen["_dsssb_run_counter"] = {"count": run_number + 1}
+    seen[DSSSB_RUN_COUNTER_KEY] = {"count": run_number + 1}
 
     if run_number % DSSSB_CHECK_EVERY_N_RUNS == 0:
         print("DEBUG: ==== Fetching DSSSB ====")
         dsssb_notices = fetch_dsssb()
     else:
         print(f"DEBUG: ==== Skipping DSSSB this run (run #{run_number}, "
-              f"checking every {DSSSB_CHECK_EVERY_N_RUNS} runs to conserve "
-              f"API credits) ====")
+              f"checking every {DSSSB_CHECK_EVERY_N_RUNS} runs) ====")
         dsssb_notices = []
 
-    notices = merge_notices(ssc_notices, dsssb_notices)
-    print(f"DEBUG: Total unique notice-like links across SSC + DSSSB = {len(notices)}")
+    if run_number % REGIONAL_CHECK_EVERY_N_RUNS == 0:
+        print("DEBUG: ==== Fetching SSC Regional Offices ====")
+        regional_notices = fetch_regional()
+    else:
+        print(f"DEBUG: ==== Skipping Regional this run (run #{run_number}, "
+              f"checking every {REGIONAL_CHECK_EVERY_N_RUNS} runs) ====")
+        regional_notices = []
+
+    notices = merge_notices(ssc_notices, dsssb_notices, regional_notices)
+    print(f"DEBUG: Total unique notice-like links across SSC + DSSSB + Regional = {len(notices)}")
 
     if not notices:
         print("No notices fetched this run (could be a temporary site issue).")
         sys.exit(0)
 
     new_count = 0
+    seeded_this_run = set()
+    seeded_counts = {}
+
     for n in notices:
         source = n.get("source", "SSC")
         key = f"{source}:{n['link']}"
@@ -1139,6 +1146,17 @@ def main():
 
         if key in seen:
             continue
+
+        if source not in seeded_sources:
+            # First time this source has EVER been seen -- this is the
+            # pre-existing backlog already on the site, not something
+            # newly published. Record it silently; do NOT alert Telegram.
+            seen[key] = {"title": n["title"], "category": n["category"], "notified": True}
+            seen_signatures.add(sig)
+            seeded_this_run.add(source)
+            seeded_counts[source] = seeded_counts.get(source, 0) + 1
+            continue
+
         if sig in seen_signatures:
             print(f"DEBUG: Skipping likely duplicate (same headline/category, "
                   f"different link) [{source}/{n['category']}]: {n['title']}")
@@ -1161,11 +1179,25 @@ def main():
             print(f"WARNING: Failed to send notice [{source}/{n['category']}]: {n['title']}")
         time.sleep(2)
 
+    for source in seeded_this_run:
+        seeded_sources.add(source)
+        print(f"DEBUG: [{source}] First run for this source -- "
+              f"{seeded_counts.get(source, 0)} existing notice(s) recorded as baseline, "
+              f"none sent to Telegram. Future new notices from this source will be "
+              f"sent instantly from the next run onwards.")
+
+    seen[SEEDED_SOURCES_KEY] = {"list": sorted(seeded_sources)}
+
     if len(seen) > 1500:
-        seen = dict(list(seen.items())[-1500:])
+        # Never drop the reserved bookkeeping keys during trim.
+        reserved = {k: seen[k] for k in RESERVED_KEYS if k in seen}
+        rest = {k: v for k, v in seen.items() if k not in RESERVED_KEYS}
+        rest = dict(list(rest.items())[-1500:])
+        seen = {**rest, **reserved}
 
     save_seen(seen)
-    print(f"Done. {new_count} new notice(s) posted.")
+    print(f"Done. {new_count} new notice(s) posted. "
+          f"{sum(seeded_counts.values())} notice(s) silently baselined this run.")
 
 
 if __name__ == "__main__":
