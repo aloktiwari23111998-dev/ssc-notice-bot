@@ -460,7 +460,7 @@
     "notified": true
   },
   "_dsssb_run_counter": {
-    "count": 12
+    "count": 13
   },
   "DSSSB:https://dsssb.delhi.gov.in/sites/default/files/DSSSB/circulars-orders/notice_no_1036.pdf": {
     "title": "TD, PGT (HISTORY) FEMALE IN DIRECTORATE OF EDUCATION, GNCTD AND PGT (HISTORY) IN NEW DELHI MUNICIPAL COUNCIL UNDER POST CODE – 831/24 Date: 10-07-2026 | 1.62 MB",
@@ -815,6 +815,11 @@
   "DSSSB:https://dsssb.delhi.gov.in/sites/default/files/DSSSB/circulars-orders/schedule.pdf": {
     "title": "What's New",
     "category": "Home",
+    "notified": true
+  },
+  "DSSSB:https://dsssb.delhi.gov.in/sites/default/files/DSSSB/circulars-orders/notice_driving_1.pdf": {
+    "title": "SCHEDULE OF DRIVING/SKILL TEST AND INTERVIEW FOR THE POST OF PROCESS SERVER (POST CODE-821/24)",
+    "category": "Notice of Exam / Circulars",
     "notified": true
   }
 }
