@@ -515,8 +515,6 @@ DSSSB_PAGES = {
     "Home": f"{DSSSB_BASE}/",
 }
 
-MAX_AUTO_DISCOVERED_PAGES = 5  # unbounded growth se bachne ke liye cap
-
 # Poori DSSSB phase (saare pages + fallback attempts milaake) is se zyada
 # time kabhi nahi legi -- runtime ko bound karne ka asli fix. Agar budget
 # khatam ho jaaye beech me, baaki pages skip ho jaate hain aur agle run
@@ -540,27 +538,6 @@ DSSSB_SKIP_LINE_PATTERNS = SKIP_LINE_PATTERNS + [
     r"^\(ex:\s*\d{4}\)$",
 ]
 
-DSSSB_NAV_IGNORE_TEXT = re.compile(
-    r"login|register|sitemap|privacy|contact|^home$|rti|tender|feedback|"
-    r"accessibility|disclaimer|help|faq",
-    re.IGNORECASE,
-)
-
-
-def is_probably_dsssb_document_link(href):
-    """Same document-detection rules as SSC's version, duplicated here to
-    keep the DSSSB module fully independent."""
-    if not href:
-        return False
-    if href.startswith(("javascript:", "mailto:", "tel:", "#")):
-        return False
-    href_lower = href.lower()
-    return (
-        href_lower.endswith(FILE_EXTENSIONS)
-        or "attachment" in href_lower
-        or "/api/" in href_lower
-    )
-
 
 def clean_dsssb_title(raw_text):
     if not raw_text:
@@ -574,117 +551,38 @@ def clean_dsssb_title(raw_text):
     return " ".join(kept).strip()
 
 
-def looks_like_generic_json_record(node):
-    """Very loose, non-schema-locked heuristic: does this dict have
-    something that looks like a title AND something that looks like a
-    document link? Used only as a DSSSB future-proofing layer, since no
-    such API is currently known to exist on DSSSB's site."""
-    if not isinstance(node, dict):
-        return None, None
-    title = None
-    for key in ("headline", "title", "name", "subject", "heading"):
-        v = node.get(key)
-        if isinstance(v, str) and v.strip():
-            title = v.strip()
-            break
-    file_link = None
-    for key in ("path", "url", "file", "fileUrl", "attachment", "pdf", "link", "href"):
-        v = node.get(key)
-        if isinstance(v, str) and v.strip():
-            if v.lower().endswith(FILE_EXTENSIONS) or "attachment" in v.lower():
-                file_link = v.strip()
-                break
-    return title, file_link
-
-
-def extract_dsssb_generic_json(node, found, source_url, category):
-    """Generic JSON record walker for DSSSB -- future-proofing in case
-    DSSSB ever adds a JSON/XHR API. Currently expected to find nothing."""
-    if isinstance(node, dict):
-        title, file_link = looks_like_generic_json_record(node)
-        if title and file_link:
-            found.append({
-                "title": title,
-                "raw_link": file_link,
-                "category": category,
-                "_source": source_url,
-            })
-        for v in node.values():
-            if isinstance(v, (dict, list)):
-                extract_dsssb_generic_json(v, found, source_url, category)
-    elif isinstance(node, list):
-        for item in node:
-            if isinstance(item, (dict, list)):
-                extract_dsssb_generic_json(item, found, source_url, category)
-
-
-def extract_dsssb_records(page, category):
-    """DOM-row extraction for one already-loaded DSSSB page. A DSSSB row
-    looks like:
-        <title text>
-        Date: dd-mm-yyyy
-        View   (this is the actual <a href=".../something.pdf">)
-    Title is plain text next to the "View" link, not inside the <a> tag --
-    so we climb up the DOM from the document link to the row container and
-    grab its text, then strip date/badge/action-word lines."""
-    found = []
-    try:
-        elements = page.query_selector_all(LINK_SELECTOR)
-    except Exception as e:
-        print(f"DEBUG: [DSSSB/{category}] DOM scan failed: {e}")
-        return found
-
-    for el in elements:
-        try:
-            href = el.get_attribute("href") or ""
-        except Exception:
-            continue
-        if not is_probably_dsssb_document_link(href):
-            continue
-        href = absolutize(href, base_domain=DSSSB_BASE)
-        if not href:
-            continue
-
-        try:
-            raw_row_text = el.evaluate("""
-                (node) => {
-                    let el = node;
-                    for (let i = 0; i < 5; i++) {
-                        if (!el.parentElement) break;
-                        el = el.parentElement;
-                        const t = el.innerText ? el.innerText.trim() : '';
-                        if (t.length > 25) return t;
-                    }
-                    return el && el.innerText ? el.innerText.trim() : '';
-                }
-            """)
-        except Exception:
-            raw_row_text = ""
-
-        title = clean_dsssb_title(raw_row_text or "")
-        if len(title) < 8:
-            continue
-
-        found.append({
-            "title": title,
-            "link": href,
-            "category": category,
-            "file_name": href.rsplit("/", 1)[-1],
-            "download_candidates": _dsssb_download_candidates(href),
-            "source": "DSSSB",
-        })
-
-    return found
-
-
 import urllib.parse
+import html as html_module
 
 
 def _strip_html_tags(html_fragment):
     text = re.sub(r"<[^>]+>", " ", html_fragment)
-    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
-    text = text.replace("&#39;", "'").replace("&rsquo;", "'").replace("&quot;", '"')
+    text = html_module.unescape(text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+TRAILING_DATE_SIZE_PATTERN = re.compile(
+    r"\s*Date\s*:\s*\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\s*\|\s*[\d.]+\s*(KB|MB)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_title_from_window(text):
+    """The raw window often contains the TAIL of the previous row (its
+    own Date/Size/'Download' text) before the current row's real title
+    begins -- a fixed character-count window can't tell rows apart. Fix:
+    find the LAST 'Download'/'View'/'Preview' word in the window (that's
+    the previous row's action link, marking exactly where it ends) and
+    keep only what comes after it -- that's the current row's actual
+    title start."""
+    matches = list(re.finditer(r"\b(download|view|preview)\b", text, re.IGNORECASE))
+    if matches:
+        text = text[matches[-1].end():]
+    text = text.strip()
+    # The current row's own trailing "Date: dd-mm-yyyy | X.XX MB" (which
+    # sits between the title and its own action link) also needs to go.
+    text = TRAILING_DATE_SIZE_PATTERN.sub("", text)
+    return text.strip()
 
 
 def extract_dsssb_records_via_reader(url, category):
@@ -781,12 +679,17 @@ def _extract_dsssb_links_from_html(html, category):
         # likely to fall outside it, then trim any mid-word/mid-tag
         # garbage from the front, then drop a leftover "Download "/"View "
         # action word if the window still starts with one.
-        window_start = max(0, m.start() - 900)
-        title = _strip_html_tags(html[window_start:m.start()])
+        # Bigger window (1200 chars) so it reliably contains the previous
+        # row's own "Download"/"View" marker, which _extract_title_from_window
+        # uses as the real split point (much more reliable than a blind
+        # character-count cut, which sliced mid-word/mid-row before).
+        window_start = max(0, m.start() - 1200)
+        raw_window = _strip_html_tags(html[window_start:m.start()])
+        title = _extract_title_from_window(raw_window)
         title = _clean_window_start(title)
         title = re.sub(r"^(download|view|preview)\s+", "", title, flags=re.IGNORECASE)
-        if len(title) > 160:
-            title = title[-160:]
+        if len(title) > 200:
+            title = title[-200:]
         title = clean_dsssb_title(title)
         if len(title) < 8:
             continue
@@ -909,22 +812,24 @@ def extract_dsssb_records_via_scraperapi(url, category):
 
 
 def fetch_dsssb_via_fallback_chain(url, category):
-    """If SCRAPER_API_KEY is set, tries it FIRST (with one retry) --
+    """If SCRAPER_API_KEY is set, tries it FIRST (up to 3 attempts) --
     empirically, across multiple runs, the 4 free anonymous proxies have
     NEVER once succeeded against DSSSB (Jina always 422, allorigins/
     codetabs always time out, corsproxy always 403 -- consistent, not
-    random), while ScraperAPI does succeed. Trying the free ones first
-    was wasting 50-60+ seconds per page for a guaranteed failure. If no
-    key is configured, falls back to the free chain as before (still
-    free, still worth trying, just unlikely to work)."""
+    random), while ScraperAPI does succeed most of the time (though
+    occasionally returns 0 for a page that has real content -- a retry
+    usually fixes this). Trying the free ones first was wasting 50-60+
+    seconds per page for a guaranteed failure. If no key is configured,
+    falls back to the free chain as before (still free, still worth
+    trying, just unlikely to work)."""
     if SCRAPER_API_KEY:
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             records = extract_dsssb_records_via_scraperapi(url, category)
             if records:
                 return records
-            if attempt == 1:
-                print(f"DEBUG: [DSSSB/{category}] ScraperAPI attempt 1 empty, retrying once...")
-        print(f"DEBUG: [DSSSB/{category}] ScraperAPI failed twice, trying free proxies as last resort...")
+            if attempt < 3:
+                print(f"DEBUG: [DSSSB/{category}] ScraperAPI attempt {attempt} empty, retrying...")
+        print(f"DEBUG: [DSSSB/{category}] ScraperAPI failed 3 times, trying free proxies as last resort...")
 
     for fn in (
         extract_dsssb_records_via_reader,
@@ -941,175 +846,51 @@ def fetch_dsssb_via_fallback_chain(url, category):
     return []
 
 
-def fetch_dsssb_page(page, category, url):
-    """Loads one DSSSB page and extracts its notices.
+def fetch_dsssb_page(category, url):
+    """Fetches one DSSSB page purely via HTTP-request-based proxies -- no
+    browser needed at all (DSSSB is plain server-rendered HTML, unlike
+    SSC's Angular app).
 
-    FIX: uses `domcontentloaded` instead of `networkidle`. DSSSB's site
-    keeps background analytics/tracker requests running continuously, so
-    "networkidle" (which needs 500ms of zero network activity) never
-    actually fires -- that was the root cause of the 60s timeouts.
-    `domcontentloaded` fires as soon as the initial HTML is parsed, which
-    is all we need since DSSSB is server-rendered (no client-side JS
-    building the notice list).
-
-    FIX: if the page fails to load at all, we return immediately WITHOUT
-    attempting a DOM scan -- attempting query_selector_all() on a page
-    that failed navigation throws "Execution context was destroyed",
-    which was cascading into a second, confusing error before.
-    """
-    found_from_api = []
-    discovered_api_urls = set()
-
-    def handle_response(response):
-        try:
-            req_url = response.url
-            if DSSSB_BASE not in req_url:
-                return
-            ctype = ""
-            try:
-                ctype = response.headers.get("content-type", "")
-            except Exception:
-                pass
-            if not looks_like_api_json_response(req_url, ctype):
-                return
-            try:
-                data = response.json()
-            except Exception:
-                return
-            discovered_api_urls.add(req_url)
-            extract_dsssb_generic_json(data, found_from_api, req_url, category)
-        except Exception:
-            pass
-
-    page.on("response", handle_response)
-    page_loaded = True
-    try:
-        # 8s hi diya (pehle 12s, uससे pehle 25s) -- GitHub Actions se DSSSB
-        # consistently block ho raha hai, isliye jaldi fail karke
-        # reader-proxy fallback pe jaana behtar hai, time waste karne se.
-        page.goto(url, wait_until="domcontentloaded", timeout=8000)
-        page.wait_for_timeout(800)
-    except Exception as e:
-        print(f"WARNING: [DSSSB/{category}] Direct browser load failed ({e}). "
-              f"Falling back to proxy chain (Jina Reader -> allorigins)...")
-        page_loaded = False
-    finally:
-        try:
-            page.remove_listener("response", handle_response)
-        except Exception:
-            pass
-
-    if discovered_api_urls:
-        print(f"DEBUG: [DSSSB/{category}] Discovered {len(discovered_api_urls)} JSON API "
-              f"endpoint(s):")
-        for u in sorted(discovered_api_urls):
-            print(f"DEBUG: [DSSSB/{category}]   API -> {u}")
-    else:
-        print(f"DEBUG: [DSSSB/{category}] No JSON API responses observed — "
-              f"relying on DOM scan only for this page.")
-
-    api_notices = []
-    for rec in found_from_api:
-        full_link = absolutize(rec["raw_link"], base_domain=DSSSB_BASE)
-        if not full_link:
-            continue
-        api_notices.append({
-            "title": rec["title"],
-            "link": full_link,
-            "category": category,
-            "file_name": full_link.rsplit("/", 1)[-1],
-            "download_candidates": [full_link],
-            "source": "DSSSB",
-        })
-
-    dom_notices = []
-    if page_loaded:
-        dom_notices = extract_dsssb_records(page, category)
-    else:
-        dom_notices = fetch_dsssb_via_fallback_chain(url, category)
-
-    combined = {}
-    for n in api_notices + dom_notices:
-        combined.setdefault(n["link"], n)
-    result = list(combined.values())
-
-    print(f"DEBUG: [DSSSB/{category}] {len(api_notices)} from JSON API (generic) + "
-          f"{len(dom_notices)} from DOM scan = {len(result)} unique notice-like item(s).")
+    REMOVED (dead code): direct Playwright navigation, and a JSON-API
+    response listener. Across every real run so far, direct navigation
+    from GitHub Actions has failed 100% of the time (DSSSB's NIC firewall
+    blocks it) and the JSON-API listener has NEVER once found anything
+    (DSSSB genuinely has no such API) -- both were pure wasted time every
+    single run (~8s + listener overhead x 7 pages) for zero benefit.
+    Going straight to the proxy chain is faster and does exactly the same
+    job."""
+    result = fetch_dsssb_via_fallback_chain(url, category)
+    print(f"DEBUG: [DSSSB/{category}] {len(result)} unique notice-like item(s) found.")
     for i, n in enumerate(result[:10]):
         print(f"DEBUG [DSSSB/{category}][{i}] title='{n['title'][:80]}' -> {n['link']}")
-
     return result
 
 
-def discover_dsssb_pages(page):
-    """Best-effort: auto-discovers additional DSSSB listing pages from the
-    home page's navigation menu, so future new sections get picked up
-    automatically. Non-fatal if it fails -- DSSSB_PAGES is always checked
-    regardless. Capped at MAX_AUTO_DISCOVERED_PAGES to avoid runaway
-    growth if the nav menu is large or noisy."""
-    discovered = {}
-    try:
-        # Chhota timeout (6s) -- ye bhi consistently block hoke fail hota
-        # hai GitHub Actions se, isliye jaldi fail hone dena behtar hai.
-        page.goto(DSSSB_BASE + "/", wait_until="domcontentloaded", timeout=6000)
-        page.wait_for_timeout(500)
-        nav_links = page.query_selector_all(
-            "nav a[href], header a[href], .menu a[href], .navbar a[href], .main-menu a[href]"
-        )
-        for el in nav_links:
-            if len(discovered) >= MAX_AUTO_DISCOVERED_PAGES:
-                break
-            try:
-                href = el.get_attribute("href") or ""
-                text = (el.inner_text() or "").strip()
-            except Exception:
-                continue
-            if not href or not text or len(text) < 3 or len(text) > 60:
-                continue
-            if href.startswith(("javascript:", "mailto:", "tel:", "#")):
-                continue
-            href_lower = href.lower()
-            if href_lower.endswith(FILE_EXTENSIONS):
-                continue
-            if DSSSB_NAV_IGNORE_TEXT.search(text):
-                continue
-            full = absolutize(href, base_domain=DSSSB_BASE)
-            if not full or not full.startswith(DSSSB_BASE):
-                continue
-            if full in DSSSB_PAGES.values():
-                continue
-            discovered[text] = full
-    except Exception as e:
-        print(f"DEBUG: [DSSSB] Auto-discovery failed to load home page: {e}")
+def fetch_dsssb():
+    """Visits every page in DSSSB_PAGES and collects notices from all of
+    them. Pure HTTP-request based -- no Playwright/browser needed at all
+    (DSSSB is plain server-rendered HTML).
 
-    return discovered
-
-
-def fetch_dsssb(page):
-    """Visits every page in DSSSB_PAGES (plus any auto-discovered ones)
-    and collects notices from all of them. Uses the SAME shared browser
-    `page` passed in from main() -- no separate Chromium instance.
+    REMOVED (dead code): auto-discovery of extra nav-menu pages. It tried
+    to load the DSSSB home page via direct Playwright navigation, which
+    -- like every other direct DSSSB request from GitHub Actions -- has
+    failed 100% of the time, every single run, printing nothing but a
+    WARNING and returning empty. It was costing 6+ seconds per run for
+    zero benefit. The 7 confirmed pages in DSSSB_PAGES already cover
+    every real public section; add a new one there directly if DSSSB
+    ever launches a new category.
 
     HARD TIME BUDGET: DSSSB_TIME_BUDGET_SECONDS caps the ENTIRE DSSSB
     phase, no matter how many pages/fallback-proxy attempts are involved.
-    This is the real fix for "runtime getting too long" -- individual
-    per-request timeouts alone don't bound total runtime when there are
-    7+ pages each potentially needing 2-3 fallback attempts. If the
-    budget runs out partway through, remaining pages are simply skipped
-    for THIS run -- they get checked again on the very next run a few
-    minutes later, since this is continuous polling, not a one-shot job.
+    If the budget runs out partway through, remaining pages are simply
+    skipped for THIS run -- they get checked again on the very next run
+    a few minutes later, since this is continuous polling, not a
+    one-shot job.
     """
     start_time = time.monotonic()
-    pages_to_check = dict(DSSSB_PAGES)
-
-    discovered = discover_dsssb_pages(page)
-    if discovered:
-        print(f"DEBUG: [DSSSB] Auto-discovered {len(discovered)} additional page(s) "
-              f"from nav menu: {list(discovered.keys())}")
-        pages_to_check.update(discovered)
 
     all_notices = []
-    for category, url in pages_to_check.items():
+    for category, url in DSSSB_PAGES.items():
         elapsed = time.monotonic() - start_time
         if elapsed > DSSSB_TIME_BUDGET_SECONDS:
             print(f"DEBUG: [DSSSB] Time budget ({DSSSB_TIME_BUDGET_SECONDS}s) reached "
@@ -1117,7 +898,7 @@ def fetch_dsssb(page):
                   f"'{category}' onwards. They'll be checked again next run.")
             break
         print(f"DEBUG: ---- Checking [DSSSB/{category}] -> {url} ----")
-        page_notices = fetch_dsssb_page(page, category, url)
+        page_notices = fetch_dsssb_page(category, url)
         all_notices.extend(page_notices)
         time.sleep(0.3)
 
@@ -1312,8 +1093,9 @@ def main():
         if isinstance(entry, dict) and "title" in entry and "category" in entry:
             seen_signatures.add(normalize_signature(entry["title"], entry["category"]))
 
-    # ---- SINGLE shared Chromium instance for SSC + DSSSB ----
-    print("DEBUG: ==== Launching single shared Chromium instance ====")
+    # ---- Chromium instance -- SSC only now (DSSSB is pure HTTP requests,
+    # no browser needed at all anymore) ----
+    print("DEBUG: ==== Launching Chromium for SSC ====")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(user_agent=USER_AGENT)
@@ -1321,25 +1103,26 @@ def main():
         print("DEBUG: ==== Fetching SSC ====")
         ssc_notices = fetch_ssc(page)
 
-        # Throttled DSSSB check -- reserved key "_dsssb_run_counter" in
-        # seen_notices.json (never collides with real "SSC:"/"DSSSB:"
-        # keys). Only matters if DSSSB_CHECK_EVERY_N_RUNS > 1 (i.e. the
-        # user is conserving ScraperAPI free credits); default behavior
-        # (=1) checks DSSSB every single run, same as before.
-        counter_entry = seen.get("_dsssb_run_counter", {})
-        run_number = counter_entry.get("count", 0) if isinstance(counter_entry, dict) else 0
-        seen["_dsssb_run_counter"] = {"count": run_number + 1}
-
-        if run_number % DSSSB_CHECK_EVERY_N_RUNS == 0:
-            print("DEBUG: ==== Fetching DSSSB ====")
-            dsssb_notices = fetch_dsssb(page)
-        else:
-            print(f"DEBUG: ==== Skipping DSSSB this run (run #{run_number}, "
-                  f"checking every {DSSSB_CHECK_EVERY_N_RUNS} runs to conserve "
-                  f"API credits) ====")
-            dsssb_notices = []
-
         browser.close()
+    print("DEBUG: ==== Chromium closed (not needed for DSSSB) ====")
+
+    # Throttled DSSSB check -- reserved key "_dsssb_run_counter" in
+    # seen_notices.json (never collides with real "SSC:"/"DSSSB:" keys).
+    # Only matters if DSSSB_CHECK_EVERY_N_RUNS > 1 (i.e. the user is
+    # conserving ScraperAPI free credits); default behavior (=1) checks
+    # DSSSB every single run, same as before.
+    counter_entry = seen.get("_dsssb_run_counter", {})
+    run_number = counter_entry.get("count", 0) if isinstance(counter_entry, dict) else 0
+    seen["_dsssb_run_counter"] = {"count": run_number + 1}
+
+    if run_number % DSSSB_CHECK_EVERY_N_RUNS == 0:
+        print("DEBUG: ==== Fetching DSSSB ====")
+        dsssb_notices = fetch_dsssb()
+    else:
+        print(f"DEBUG: ==== Skipping DSSSB this run (run #{run_number}, "
+              f"checking every {DSSSB_CHECK_EVERY_N_RUNS} runs to conserve "
+              f"API credits) ====")
+        dsssb_notices = []
 
     notices = merge_notices(ssc_notices, dsssb_notices)
     print(f"DEBUG: Total unique notice-like links across SSC + DSSSB = {len(notices)}")
